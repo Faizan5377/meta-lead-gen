@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+.vite/
+
+# Environment / secrets
+.env
+.env.local
+*.local
+meta-session.json
+
+# Internal spec & tooling — not part of the shipped app
+META_ADS_LIBRARY_SCRAPER_SPEC.md
+.claude/
+
+# Scratch / probes
+server/probe*.js
+server/probe*.png
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
