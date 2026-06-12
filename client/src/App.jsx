@@ -75,6 +75,27 @@ export default function App() {
     try { await api.stopSession(state.sessionId); } catch {}
   }
 
+  const [refreshing, setRefreshing] = useState(false);
+  async function onRefresh() {
+    if (!state.sessionId) return;
+    setRefreshing(true);
+    try {
+      const session = await api.getSession(state.sessionId);
+      dispatch({ type: '__snapshot__', session });
+    } catch {} finally {
+      setTimeout(() => setRefreshing(false), 400);
+    }
+  }
+
+  async function onEnrichContacts() {
+    if (!state.sessionId) return;
+    try { await api.enrichContacts(state.sessionId); } catch (err) { alert('Could not start contact enrichment: ' + err.message); }
+  }
+  async function onStopContacts() {
+    if (!state.sessionId) return;
+    try { await api.stopContacts(state.sessionId); } catch {}
+  }
+
   const totalCompanies = useMemo(() => {
     const s = new Set(state.leads.map(l => l.page_slug).filter(Boolean));
     return s.size;
@@ -97,6 +118,34 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {state.contactRunning ? (
+              <button
+                onClick={onStopContacts}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 hover:border-amber-500/70 transition-colors"
+              >
+                <span className="animate-spin inline-block">◌</span>
+                Contacts {state.contactDone}/{state.contactTotal} · Stop
+              </button>
+            ) : (hasLeads && finished && (
+              <button
+                onClick={onEnrichContacts}
+                title="Visit each business's Facebook Page and scrape email / phone / website"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-accent-500/50 bg-accent-500/10 px-3 py-2 text-xs text-accent-100 hover:bg-accent-500/20 transition-colors"
+              >
+                ✉ Get Facebook contacts
+              </button>
+            ))}
+            {state.sessionId && (
+              <button
+                onClick={onRefresh}
+                disabled={refreshing}
+                title="Pull the latest results from the server"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-ink-700 px-3 py-2 text-xs text-ink-300 hover:text-ink-100 hover:border-ink-500 disabled:opacity-50 transition-colors"
+              >
+                <span className={refreshing ? 'animate-spin inline-block' : 'inline-block'}>↻</span>
+                Refresh
+              </button>
+            )}
             {hasLeads && (
               <ExportButton sessionId={state.sessionId} disabled={state.leads.length === 0} />
             )}

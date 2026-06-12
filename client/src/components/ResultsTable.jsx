@@ -23,6 +23,29 @@ function CellEnrichable({ value, status, children }) {
   return children;
 }
 
+function ContactCell({ lead, kind }) {
+  const status = lead.contact_status;
+  const value = kind === 'email' ? lead.contact_email
+    : kind === 'phone' ? lead.contact_phone
+    : lead.contact_website;
+
+  if (status === 'idle') return <span className="text-ink-700">·</span>;
+  if (status === 'pending') return <div className="h-3 w-16 rounded shimmer" />;
+  if (!value) return <span className="text-ink-600">—</span>;
+
+  if (kind === 'email') {
+    return <a href={`mailto:${value}`} className="text-xs text-accent-300 hover:text-accent-200 truncate block" title={value}>{value}</a>;
+  }
+  if (kind === 'phone') {
+    return <a href={`tel:${value}`} className="text-xs text-ink-200 hover:text-accent-200 truncate block tabular" title={value}>{value}</a>;
+  }
+  return (
+    <a href={value} target="_blank" rel="noopener noreferrer" className="text-xs text-accent-300 hover:text-accent-200 truncate block" title={value}>
+      {safeHost(value)}
+    </a>
+  );
+}
+
 export default function ResultsTable({ leads, totalCompanies }) {
   const [tierFilter, setTierFilter] = useState('all'); // all | hot | warm | cool | cold
   const [showCold, setShowCold] = useState(false);
@@ -143,6 +166,9 @@ export default function ResultsTable({ leads, totalCompanies }) {
               <Th col="days_running" sort={sort} onSort={sortBy} className="text-right">Days</Th>
               <Th col="fb_followers" sort={sort} onSort={sortBy} className="text-right">FB</Th>
               <Th col="ig_followers" sort={sort} onSort={sortBy} className="text-right">IG</Th>
+              <th className="px-3 py-2 font-medium">Email</th>
+              <th className="px-3 py-2 font-medium">Phone</th>
+              <th className="px-3 py-2 font-medium">Website</th>
               <th className="px-3 py-2 font-medium">Platforms</th>
               <th className="px-3 py-2 font-medium">CTA · Headline</th>
               <th className="px-3 py-2 font-medium">Domain</th>
@@ -192,6 +218,9 @@ export default function ResultsTable({ leads, totalCompanies }) {
                       {lead.ig_followers != null ? formatFollowers(lead.ig_followers) : <span className="text-ink-600">—</span>}
                     </CellEnrichable>
                   </td>
+                  <td className="px-3 py-2.5 max-w-[180px]"><ContactCell lead={lead} kind="email" /></td>
+                  <td className="px-3 py-2.5 max-w-[140px]"><ContactCell lead={lead} kind="phone" /></td>
+                  <td className="px-3 py-2.5 max-w-[150px]"><ContactCell lead={lead} kind="website" /></td>
                   <td className="px-3 py-2.5">
                     <div className="flex gap-1">
                       {(lead.platforms || []).map(p => (

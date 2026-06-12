@@ -4,6 +4,7 @@
 import { config } from './config.js';
 import { bus } from './eventStream.js';
 import { enrichAdvertiserByLibraryId, getContext, scrapeKeyword } from './scraper/engine.js';
+import { scrapeFacebookContact } from './scraper/contactScraper.js';
 import { scoreLead } from './scorer.js';
 import { store } from './store.js';
 
@@ -89,6 +90,10 @@ export async function runSession(sessionId) {
       }
 
       const slugQueue = Array.from(slugs);
+      const totalToEnrich = slugQueue.length;
+      let enrichedCount = 0;
+      bus.emit(sessionId, { type: 'enrich_started', keyword, total: totalToEnrich });
+
       const workers = Math.min(config.enrichConcurrency, Math.max(1, slugQueue.length));
       const workerPromises = [];
       for (let w = 0; w < workers; w++) {
@@ -101,6 +106,13 @@ export async function runSession(sessionId) {
               const ids = session.adsByPageSlug.get(slug);
               if (!ids?.length) continue;
               const sampleId = ids[0];
+              const sampleLead = session.leadsByLibraryId.get(sampleId);
+              const pageName = sampleLead?.page_name || slug;
+              // Announce which advertiser we're processing right now.
+              bus.emit(sessionId, {
+                type: 'enrich_progress', keyword, done: enrichedCount, total: totalToEnrich,
+                current: pageName, page_slug: slug,
+              });
               try {
                 const patch = await enrichAdvertiserByLibraryId(workerPage, sampleId);
                 session.enrichedPageSlugs.add(slug);
@@ -117,6 +129,11 @@ export async function runSession(sessionId) {
                   type: 'error', scope: 'enrichment', page_slug: slug, message: err.message, recoverable: true,
                 });
               }
+              enrichedCount++;
+              bus.emit(sessionId, {
+                type: 'enrich_progress', keyword, done: enrichedCount, total: totalToEnrich,
+                current: pageName, page_slug: slug,
+              });
             }
           } finally {
             if (w > 0) try { await workerPage.close(); } catch {}
@@ -146,6 +163,83 @@ export async function runSession(sessionId) {
   } finally {
     try { await page.close(); } catch {}
   }
+}
+
+// Phase C — visit each unique advertiser's Facebook Page and scrape contact
+// info (email / phone / website). Operator-triggered after scraping finishes.
+export async function runContactEnrichment(sessionId) {
+  const session = store.get(sessionId);
+  if (!session) return;
+  if (session.contactEnriching) return; // already running
+  session.contactEnriching = true;
+  session.contactCancel = false;
+
+  // Unique advertisers that (a) have a Facebook page URL and (b) weren't done yet.
+  const slugs = [];
+  for (const [slug, ids] of session.adsByPageSlug.entries()) {
+    if (!ids?.length) continue;
+    if (session.contactDoneSlugs?.has(slug)) continue;
+    const lead = session.leadsByLibraryId.get(ids[0]);
+    if (lead?.page_url && /facebook\.com/.test(lead.page_url)) slugs.push(slug);
+  }
+  session.contactDoneSlugs = session.contactDoneSlugs || new Set();
+
+  const total = slugs.length;
+  let done = 0;
+  bus.emit(sessionId, { type: 'contact_started', total });
+
+  const ctx = await getContext();
+  const queue = slugs.slice();
+  const workers = Math.min(config.enrichConcurrency, Math.max(1, queue.length));
+  const tasks = [];
+
+  for (let w = 0; w < workers; w++) {
+    tasks.push((async () => {
+      const wp = await ctx.newPage();
+      try {
+        while (queue.length) {
+          if (session.contactCancel) return;
+          const slug = queue.shift();
+          const ids = session.adsByPageSlug.get(slug);
+          if (!ids?.length) continue;
+          const sampleLead = session.leadsByLibraryId.get(ids[0]);
+          const pageName = sampleLead?.page_name || slug;
+
+          bus.emit(sessionId, { type: 'contact_progress', done, total, current: pageName, page_slug: slug });
+          store.patchLeadsByPageSlug(session, slug, { contact_status: 'pending' });
+
+          try {
+            const patch = await scrapeFacebookContact(wp, sampleLead.page_url);
+            session.contactDoneSlugs.add(slug);
+            const patched = store.patchLeadsByPageSlug(session, slug, patch);
+            for (const lead of patched) {
+              bus.emit(sessionId, { type: 'lead_contact', library_id: lead.library_id, page_slug: slug, patch });
+            }
+          } catch (err) {
+            store.patchLeadsByPageSlug(session, slug, { contact_status: 'failed' });
+            session.errors.push({ scope: 'contact', slug, message: err.message });
+            bus.emit(sessionId, { type: 'error', scope: 'contact', page_slug: slug, message: err.message, recoverable: true });
+          }
+          done++;
+          bus.emit(sessionId, { type: 'contact_progress', done, total, current: pageName, page_slug: slug });
+        }
+      } finally {
+        try { await wp.close(); } catch {}
+      }
+    })());
+  }
+  await Promise.all(tasks);
+
+  session.contactEnriching = false;
+  const withContact = session.leads.filter(l => l.contact_status === 'enriched').length;
+  bus.emit(sessionId, { type: 'contact_finished', total, enriched: withContact });
+}
+
+export function stopContactEnrichment(sessionId) {
+  const session = store.get(sessionId);
+  if (!session) return false;
+  session.contactCancel = true;
+  return true;
 }
 
 function updateCompanyCount(sessionId, session, pageSlug) {

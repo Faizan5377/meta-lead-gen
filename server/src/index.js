@@ -20,7 +20,7 @@ import { csvFilename, exportPerAd, exportPerCompany } from './csvExporter.js';
 import { bus } from './eventStream.js';
 import { KEYWORD_PRESETS } from './keywords.js';
 import { AD_CATEGORIES, LOCATIONS } from './locations.js';
-import { runSession, stopSession } from './orchestrator.js';
+import { runContactEnrichment, runSession, stopContactEnrichment, stopSession } from './orchestrator.js';
 import { shutdown } from './scraper/engine.js';
 import { store } from './store.js';
 
@@ -68,6 +68,20 @@ app.post('/api/sessions/:id/start', async (req, reply) => {
 
 app.post('/api/sessions/:id/stop', async (req, reply) => {
   const ok = stopSession(req.params.id);
+  if (!ok) return reply.code(404).send({ error: 'session not found' });
+  return { ok: true };
+});
+
+app.post('/api/sessions/:id/enrich-contacts', async (req, reply) => {
+  const session = store.get(req.params.id);
+  if (!session) return reply.code(404).send({ error: 'session not found' });
+  if (session.contactEnriching) return reply.code(409).send({ error: 'contact enrichment already running' });
+  runContactEnrichment(session.id).catch(err => app.log.error(err, 'contact enrichment failed'));
+  return { ok: true };
+});
+
+app.post('/api/sessions/:id/stop-contacts', async (req, reply) => {
+  const ok = stopContactEnrichment(req.params.id);
   if (!ok) return reply.code(404).send({ error: 'session not found' });
   return { ok: true };
 });

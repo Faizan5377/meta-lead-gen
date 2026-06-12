@@ -114,6 +114,55 @@ export default function StatusBar({ state, totalCompanies }) {
         )}
       </div>
 
+      {/* Phase progress — which step + which lead we're on */}
+      {isRunning && (state.phase === 'enriching' || state.phase === 'discovering') && (
+        <div className="mb-3">
+          {state.phase === 'discovering' ? (
+            <div className="flex items-center justify-between text-xs mb-1.5">
+              <span className="text-accent-300">① Discovering ads</span>
+              <span className="text-ink-400 tabular">{leads.length} found</span>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between text-xs mb-1.5">
+                <span className="text-accent-300">
+                  ② Enriching advertiser <span className="tabular text-ink-200">{state.enrichDone}/{state.enrichTotal}</span>
+                </span>
+                <span className="text-ink-400 truncate max-w-[55%]" title={state.enrichCurrent || ''}>
+                  {state.enrichCurrent ? `→ ${state.enrichCurrent}` : ''}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-ink-800 overflow-hidden">
+                <div
+                  className="h-full bg-accent-500 transition-all duration-300"
+                  style={{ width: state.enrichTotal ? `${Math.round((state.enrichDone / state.enrichTotal) * 100)}%` : '0%' }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Contact enrichment (Phase C) — runs after scraping finishes */}
+      {state.contactRunning && (
+        <div className="mb-3">
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="text-accent-300">
+              ✉ Fetching Facebook contacts <span className="tabular text-ink-200">{state.contactDone}/{state.contactTotal}</span>
+            </span>
+            <span className="text-ink-400 truncate max-w-[55%]" title={state.contactCurrent || ''}>
+              {state.contactCurrent ? `→ ${state.contactCurrent}` : ''}
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-ink-800 overflow-hidden">
+            <div
+              className="h-full bg-accent-500 transition-all duration-300"
+              style={{ width: state.contactTotal ? `${Math.round((state.contactDone / state.contactTotal) * 100)}%` : '0%' }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Ticker */}
       <motion.div
         key={ticker || 'idle'}

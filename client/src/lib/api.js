@@ -17,5 +17,8 @@ export const api = {
   createSession: (payload) => req('/api/sessions', { method: 'POST', body: JSON.stringify(payload) }),
   startSession: (id) => req(`/api/sessions/${id}/start`, { method: 'POST' }),
   stopSession: (id) => req(`/api/sessions/${id}/stop`, { method: 'POST' }),
+  getSession: (id) => req(`/api/sessions/${id}`),
+  enrichContacts: (id) => req(`/api/sessions/${id}/enrich-contacts`, { method: 'POST' }),
+  stopContacts: (id) => req(`/api/sessions/${id}/stop-contacts`, { method: 'POST' }),
   exportUrl: (id, mode, scope) => `/api/sessions/${id}/export?mode=${mode}&scope=${scope}`,
 };

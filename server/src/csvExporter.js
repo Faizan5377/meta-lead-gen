@@ -12,7 +12,8 @@ const PER_AD_COLUMNS = [
   'fb_handle', 'fb_followers_raw', 'fb_followers',
   'ig_handle', 'ig_followers_raw', 'ig_followers',
   'advertiser_category', 'advertiser_about',
-  'enrichment_status', 'relevance_status',
+  'contact_email', 'contact_phone', 'contact_website',
+  'enrichment_status', 'contact_status', 'relevance_status',
 ];
 
 const TIER_ORDER = { hot: 0, warm: 1, cool: 2, cold: 3, undefined: 4 };
@@ -68,6 +69,10 @@ export function exportPerCompany(session, { scope = 'hot_warm' } = {}) {
         ig_handle: lead.ig_handle,
         fb_followers: lead.fb_followers,
         ig_followers: lead.ig_followers,
+        contact_email: lead.contact_email,
+        contact_phone: lead.contact_phone,
+        contact_website: lead.contact_website,
+        contact_status: lead.contact_status,
         relevance_score: lead.relevance_score,
         relevance_tier: lead.relevance_tier,
         relevance_reasons: lead.relevance_reasons,
@@ -99,6 +104,7 @@ export function exportPerCompany(session, { scope = 'hot_warm' } = {}) {
     'page_name', 'page_slug', 'page_url',
     'relevance_score', 'relevance_tier', 'relevance_reasons',
     'advertiser_category',
+    'contact_email', 'contact_phone', 'contact_website',
     'fb_handle', 'fb_followers', 'ig_handle', 'ig_followers',
     'company_total_ads', 'keywords_matched', 'days_running_max',
     'display_domains', 'destination_urls',

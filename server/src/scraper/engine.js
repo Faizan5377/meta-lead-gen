@@ -353,6 +353,10 @@ function normalizeLead(c, { keyword, location, locationCode }) {
     advertiser_category: null, advertiser_about: null,
     enrichment_status: 'pending',
 
+    // Phase C — Facebook Page contact info (populated on demand)
+    contact_email: null, contact_phone: null, contact_website: null,
+    contact_status: 'idle', // idle | pending | enriched | failed
+
     relevance_score: null, relevance_tier: null, relevance_reasons: null,
     is_lead_gen_ad: null, search_match: null, relevance_status: 'pending',
   };
@@ -360,89 +364,118 @@ function normalizeLead(c, { keyword, location, locationCode }) {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Pass B — enrich
+//
+// On the ad snapshot page the advertiser info is NOT shown until you:
+//   1. click "See ad details"        → opens the details drawer
+//   2. expand "About the advertiser"  → reveals per-platform handles/followers
+//
+// Real rendered format (Facebook listed first, Instagram second; no explicit
+// platform labels — they're distinguished by ORDER):
+//
+//   About the advertiser
+//   First State Community Bank          ← page name
+//   @FSCBank                            ← FB handle
+//   16.1K followers •
+//   Financial service                  ← page category
+//   @fscbank                            ← IG handle
+//   1.5K followers
+//   More info
+//   <business description>
+//   About ads and data use
 
-const EXTRACT_ADVERTISER_SCRIPT = `
+// Pull just the "About the advertiser" region as plain text.
+const GRAB_ABOUT_BLOCK = `
 (() => {
-  // The drawer renders a heading "About the advertiser" followed by per-platform
-  // rows like "Facebook · @handle · 8.7K followers · Estate agent" and a
-  // "More info" blurb. We look for the heading element and walk its container.
-  const headingEl = Array.from(document.querySelectorAll('span, div, h2, h3'))
-    .find(el => (el.innerText || '').trim() === 'About the advertiser');
-  if (!headingEl) return null;
-
-  let container = headingEl;
-  for (let i = 0; i < 6 && container.parentElement; i++) container = container.parentElement;
-
-  const fullText = (container.innerText || '').replace(/\\u00a0/g, ' ');
-
-  const out = { fb: null, ig: null, category: null, about: null, raw: fullText };
-
-  // Per-platform parse. Each platform appears as a line "Facebook" then below
-  // "@handle" "1.2K followers" "Category".
-  const lines = fullText.split('\\n').map(l => l.trim()).filter(Boolean);
-  const platformIdx = (name) => lines.findIndex(l => l === name);
-
-  function readPlatform(name) {
-    const idx = platformIdx(name);
-    if (idx === -1) return null;
-    const block = lines.slice(idx, idx + 6);
-    const handle = block.find(l => /^@[\\w.]+$/i.test(l)) || null;
-    const followersLine = block.find(l => /followers?$/i.test(l));
-    const followers_raw = followersLine ? followersLine.replace(/\\s*followers?$/i, '').trim() : null;
-    // Category: a short non-numeric line that isn't handle/followers
-    const skip = new Set([name, handle, followersLine].filter(Boolean));
-    const category = block.find(l => !skip.has(l) && l !== name && !/followers?$/i.test(l) && !/^@/.test(l)
-      && l.length > 1 && l.length < 60) || null;
-    return { handle: handle ? handle.slice(1) : null, followers_raw, category };
-  }
-
-  out.fb = readPlatform('Facebook');
-  out.ig = readPlatform('Instagram');
-
-  // Category (often shown once at the top under the header avatar)
-  if (!out.fb?.category && !out.ig?.category) {
-    const headerCategory = lines.slice(0, 6).find(l =>
-      l.length > 2 && l.length < 40 && !/About the advertiser/i.test(l) && !/^@/.test(l) && !/followers?/i.test(l)
-    );
-    out.category = headerCategory || null;
-  } else {
-    out.category = out.fb?.category || out.ig?.category || null;
-  }
-
-  // "More info" blurb
-  const moreIdx = lines.findIndex(l => /^More info$/i.test(l));
-  if (moreIdx !== -1) {
-    out.about = lines.slice(moreIdx + 1, moreIdx + 8).filter(l =>
-      l.length > 0 && !/^About ads and data use$/i.test(l)
-    ).join(' ').slice(0, 600);
-  }
-
-  return out;
+  const t = (document.body.innerText || '').replace(/\\u00a0/g, ' ');
+  const i = t.search(/About the advertiser/i);
+  if (i === -1) return null;
+  let rest = t.slice(i + 'About the advertiser'.length);
+  const end = rest.search(/About ads and data use|\\nClose\\b/i);
+  if (end !== -1) rest = rest.slice(0, end);
+  return rest.trim();
 })()
 `;
 
-export async function enrichAdvertiserByLibraryId(page, libraryId) {
-  // Navigate to the ad snapshot URL — it's the most reliable way to land on
-  // ONE ad and open its details. The snapshot page directly exposes the
-  // "About the advertiser" content without scrolling through a list.
-  await page.goto(adSnapshotUrl(libraryId), { waitUntil: 'domcontentloaded' });
-  await jitter(700, 1400);
+export function parseAboutBlock(block) {
+  if (!block) return null;
+  const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Try to expand "About the advertiser" if it's collapsed.
-  const headingLocator = page.getByText(/^About the advertiser$/).first();
+  // Collect platform entries: each is an @handle followed (soon) by a
+  // "<n> followers" line. Category is the first plain line after the first
+  // follower line. Meta orders Facebook first, then Instagram.
+  const entries = [];
+  let category = null;
+  let lastHandle = null;
+  let sawFirstFollower = false;
+
+  for (const ln of lines) {
+    if (/^More info$/i.test(ln)) break;
+    if (/^@[\w.]+$/.test(ln)) { lastHandle = ln.slice(1); continue; }
+    const fm = ln.match(/([\d.,]+\s*[KMB]?)\s*•?\s*followers/i);
+    if (fm) {
+      entries.push({ handle: lastHandle, followers_raw: fm[1].replace(/\s+/g, '') });
+      lastHandle = null;
+      sawFirstFollower = true;
+      continue;
+    }
+    // First non-handle / non-follower line after the first follower = category.
+    if (sawFirstFollower && !category && ln.length > 1 && ln.length < 50
+        && !/^@/.test(ln) && !/followers/i.test(ln)) {
+      category = ln;
+    }
+  }
+
+  // "More info" business blurb.
+  let about = null;
+  const moreIdx = lines.findIndex(l => /^More info$/i.test(l));
+  if (moreIdx !== -1) {
+    about = lines.slice(moreIdx + 1).join(' ').slice(0, 600) || null;
+  }
+
+  const fb = entries[0] || null;
+  const ig = entries[1] || null;
+  return { fb, ig, category, about, entryCount: entries.length };
+}
+
+export async function enrichAdvertiserByLibraryId(page, libraryId) {
+  await page.goto(adSnapshotUrl(libraryId), { waitUntil: 'domcontentloaded' });
+
+  // Step 1 — open the ad details drawer.
+  const seeDetails = page.getByText(/^See ad details$/).first();
   try {
-    await headingLocator.waitFor({ timeout: 10000 });
-    // Some renderings wrap the heading in a button; click on it (or a sibling)
-    // to expand if needed. Clicking a heading is safe even if already expanded.
-    try { await headingLocator.click({ timeout: 1500 }); } catch {}
-    await jitter(400, 900);
+    await seeDetails.waitFor({ timeout: 15000 });
+    await seeDetails.click({ timeout: 3000 });
   } catch {
     return { enrichment_status: 'failed' };
   }
 
-  const data = await page.evaluate(EXTRACT_ADVERTISER_SCRIPT).catch(() => null);
+  // Step 2 — expand "About the advertiser".
+  const about = page.getByText(/^About the advertiser$/).first();
+  try {
+    await about.waitFor({ timeout: 10000 });
+    await about.click({ timeout: 2500 }).catch(() => {});
+  } catch {
+    return { enrichment_status: 'failed' };
+  }
+
+  // Wait for follower text to appear; if the click collapsed an already-open
+  // section, click once more.
+  const hasFollowers = () => page.evaluate(() => /followers/i.test(document.body.innerText)).catch(() => false);
+  let ok = await page.waitForFunction(
+    () => /followers/i.test(document.body.innerText),
+    { timeout: 5000 }
+  ).then(() => true).catch(() => false);
+  if (!ok) {
+    await about.click({ timeout: 2500 }).catch(() => {});
+    await jitter(800, 1300);
+    ok = await hasFollowers();
+  }
+
+  const block = await page.evaluate(GRAB_ABOUT_BLOCK).catch(() => null);
+  const data = parseAboutBlock(block);
   if (!data) return { enrichment_status: 'failed' };
 
+  const enriched = !!(data.fb?.followers_raw || data.ig?.followers_raw || data.category);
   return {
     fb_handle: data.fb?.handle || null,
     fb_followers_raw: data.fb?.followers_raw || null,
@@ -452,7 +485,6 @@ export async function enrichAdvertiserByLibraryId(page, libraryId) {
     ig_followers: parseFollowers(data.ig?.followers_raw),
     advertiser_category: data.category || null,
     advertiser_about: data.about || null,
-    enrichment_status:
-      data.fb?.followers_raw || data.ig?.followers_raw || data.category ? 'enriched' : 'failed',
+    enrichment_status: enriched ? 'enriched' : 'failed',
   };
 }
