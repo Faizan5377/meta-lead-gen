@@ -65,6 +65,13 @@ cd client && npm run dev
 
 Open **http://localhost:5173**. The scraper runs **headless** — no browser window opens.
 
+> **No database setup needed.** On first launch the backend automatically creates
+> `server/data/leads.db` (folder, file, and tables) — so a fresh clone just needs
+> `npm install` then `npm run dev`. The database file is gitignored, so every user
+> starts with their own empty database. This requires **Node 22.5+** for the
+> built-in `node:sqlite`; on older Node the app still runs, just without
+> cross-session dedup (persistence is skipped, never a crash).
+
 ---
 
 ## How to use it
