@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "dev": "node --experimental-sqlite --watch src/index.js",
+    "start": "node --experimental-sqlite src/index.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

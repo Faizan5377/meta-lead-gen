@@ -14,5 +14,5 @@ export function formatDate(iso) {
 
 export function safeHost(url) {
   if (!url) return '';
-  try { return new URL(url).hostname; } catch { return url; }
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
 }

@@ -1,289 +1,196 @@
-// Per-keyword session orchestrator. Owns the Playwright page, drives both
-// scraping passes, computes company_total_ads live, and emits events.
+// The automatic pipeline for one run, in sequence:
+//   1. Harvest   — collect unique businesses (one longest-running ad each),
+//                  skipping anything already in the DB, up to the target.
+//   2. Contacts  — visit each business's Facebook page for email/phone/website.
+//   3. Google    — best-effort owner/founder lookup per business.
+//   4. Done      — export becomes available.
+//
+// Every phase is wrapped so a failure never crashes the run; per-item errors are
+// logged and streamed, and the pipeline always finalizes.
 
 import { config } from './config.js';
+import { db } from './db.js';
 import { bus } from './eventStream.js';
-import { enrichAdvertiserByLibraryId, getContext, scrapeKeyword } from './scraper/engine.js';
-import { scrapeFacebookContact } from './scraper/contactScraper.js';
-import { scoreLead } from './scorer.js';
+import { COUNTRIES } from './filters.js';
 import { store } from './store.js';
+import { scrapeFacebookContact } from './scraper/contactScraper.js';
+import { getContext, harvest } from './scraper/engine.js';
+import { scrapeOwnerInfo } from './scraper/googleEnrichment.js';
 
-export async function runSession(sessionId) {
-  const session = store.get(sessionId);
-  if (!session) return;
-  session.status = 'running';
-  bus.emit(sessionId, {
-    type: 'session_started',
-    sessionId,
-    location: session.location,
-    locationCode: session.locationCode,
-    adType: session.adType,
-    adTypeLabel: session.adTypeLabel,
-    mode: session.mode,
-    maxCards: session.maxCards,
-    keywords: session.keywords,
-  });
+const countryName = (code) => COUNTRIES.find(c => c.code === code)?.name || code;
 
-  const ctx = await getContext();
-  const page = await ctx.newPage();
+export async function runPipeline(runId) {
+  const run = store.get(runId);
+  if (!run) return;
+  run.status = 'running';
+  run.startedAt = new Date().toISOString();
+  run.phase = 'harvesting';
+  emit(runId, { type: 'run_started', snapshot: store.snapshot(run) });
 
   try {
-    for (let i = 0; i < session.keywords.length; i++) {
-      if (session.cancelRequested) break;
-      const keyword = session.keywords[i];
-      session.currentKeywordIndex = i;
-      session.currentKeyword = keyword;
-
-      bus.emit(sessionId, {
-        type: 'keyword_started',
-        index: i,
-        total: session.keywords.length,
-        keyword,
-      });
-
-      // Pass A — discover
-      let libraryIds = [];
-      try {
-        libraryIds = await scrapeKeyword({
-          page,
-          country: session.locationCode,
-          keyword,
-          adType: session.adType,
-          location: session.location,
-          locationCode: session.locationCode,
-          onLeadDiscovered: (lead) => {
-            store.addLead(session, lead);
-            updateCompanyCount(sessionId, session, lead.page_slug);
-            bus.emit(sessionId, { type: 'lead_discovered', keyword, lead });
-          },
-          onProgress: (p) => {
-            bus.emit(sessionId, { type: 'scroll_progress', keyword, ...p });
-          },
-          shouldStop: () => session.cancelRequested,
-          maxCards: session.maxCards,
-        });
-      } catch (err) {
-        session.errors.push({ scope: 'keyword', keyword, message: err.message });
-        bus.emit(sessionId, {
-          type: 'error', scope: 'keyword', keyword, message: err.message, recoverable: true,
-        });
-      }
-
-      bus.emit(sessionId, {
-        type: 'keyword_pass_a_done',
-        keyword,
-        leadsDiscovered: libraryIds.length,
-      });
-
-      if (session.cancelRequested) break;
-
-      // Pass B — enrich one card per unique advertiser, fan out to siblings.
-      const slugs = new Set();
-      for (const id of libraryIds) {
-        const lead = session.leadsByLibraryId.get(id);
-        if (!lead) continue;
-        // Re-score with whatever data we already have (so cards stream colored).
-        applyScore(sessionId, session, lead);
-        if (lead.page_slug && !slugs.has(lead.page_slug) && !session.enrichedPageSlugs.has(lead.page_slug)) {
-          slugs.add(lead.page_slug);
-        }
-      }
-
-      const slugQueue = Array.from(slugs);
-      const totalToEnrich = slugQueue.length;
-      let enrichedCount = 0;
-      bus.emit(sessionId, { type: 'enrich_started', keyword, total: totalToEnrich });
-
-      const workers = Math.min(config.enrichConcurrency, Math.max(1, slugQueue.length));
-      const workerPromises = [];
-      for (let w = 0; w < workers; w++) {
-        workerPromises.push((async () => {
-          const workerPage = w === 0 ? page : await ctx.newPage();
-          try {
-            while (slugQueue.length) {
-              if (session.cancelRequested) return;
-              const slug = slugQueue.shift();
-              const ids = session.adsByPageSlug.get(slug);
-              if (!ids?.length) continue;
-              const sampleId = ids[0];
-              const sampleLead = session.leadsByLibraryId.get(sampleId);
-              const pageName = sampleLead?.page_name || slug;
-              // Announce which advertiser we're processing right now.
-              bus.emit(sessionId, {
-                type: 'enrich_progress', keyword, done: enrichedCount, total: totalToEnrich,
-                current: pageName, page_slug: slug,
-              });
-              try {
-                const patch = await enrichAdvertiserByLibraryId(workerPage, sampleId);
-                session.enrichedPageSlugs.add(slug);
-                const patched = store.patchLeadsByPageSlug(session, slug, patch);
-                for (const lead of patched) {
-                  bus.emit(sessionId, {
-                    type: 'lead_enriched', library_id: lead.library_id, page_slug: slug, patch,
-                  });
-                  applyScore(sessionId, session, lead);
-                }
-              } catch (err) {
-                session.errors.push({ scope: 'enrichment', slug, message: err.message });
-                bus.emit(sessionId, {
-                  type: 'error', scope: 'enrichment', page_slug: slug, message: err.message, recoverable: true,
-                });
-              }
-              enrichedCount++;
-              bus.emit(sessionId, {
-                type: 'enrich_progress', keyword, done: enrichedCount, total: totalToEnrich,
-                current: pageName, page_slug: slug,
-              });
-            }
-          } finally {
-            if (w > 0) try { await workerPage.close(); } catch {}
-          }
-        })());
-      }
-      await Promise.all(workerPromises);
-
-      bus.emit(sessionId, {
-        type: 'keyword_finished',
-        keyword,
-        totalLeads: libraryIds.length,
-      });
-    }
-
-    session.status = session.cancelRequested ? 'stopped' : 'finished';
-    session.finishedAt = new Date().toISOString();
-    bus.emit(sessionId, {
-      type: session.cancelRequested ? 'session_stopped' : 'session_finished',
-      totalLeads: session.leads.length,
-      tierCounts: store.tierCounts(session),
-    });
+    await harvestPhase(run);
+    if (!run.cancelRequested) await contactsPhase(run);
+    if (!run.cancelRequested && config.googleEnrichEnabled) await googlePhase(run);
+    finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
-    session.status = 'error';
-    session.errors.push({ scope: 'session', message: err.message });
-    bus.emit(sessionId, { type: 'error', scope: 'session', message: err.message, recoverable: false });
-  } finally {
-    try { await page.close(); } catch {}
+    run.errors.push({ scope: 'pipeline', message: err.message, ts: now() });
+    finalize(run, 'error', err.message);
   }
 }
 
-// Phase C — visit each unique advertiser's Facebook Page and scrape contact
-// info (email / phone / website). Operator-triggered after scraping finishes.
-export async function runContactEnrichment(sessionId) {
-  const session = store.get(sessionId);
-  if (!session) return;
-  if (session.contactEnriching) return; // already running
-  session.contactEnriching = true;
-  session.contactCancel = false;
+// ── Phase 1: harvest ─────────────────────────────────────────────────────────
+async function harvestPhase(run) {
+  run.phase = 'harvesting';
+  emit(run.id, { type: 'phase_started', phase: 'harvesting', target: run.target });
 
-  // Unique advertisers that (a) have a Facebook page URL and (b) weren't done yet.
-  const slugs = [];
-  for (const [slug, ids] of session.adsByPageSlug.entries()) {
-    if (!ids?.length) continue;
-    if (session.contactDoneSlugs?.has(slug)) continue;
-    const lead = session.leadsByLibraryId.get(ids[0]);
-    if (lead?.page_url && /facebook\.com/.test(lead.page_url)) slugs.push(slug);
-  }
-  session.contactDoneSlugs = session.contactDoneSlugs || new Set();
+  await harvest({
+    filters: run.filters,
+    shouldStop: () => run.cancelRequested || run.counts.kept >= run.target,
+    onAd: (rec) => {
+      const res = store.considerAd(run, rec);
+      if (res.status === 'added') {
+        db.markSeen(rec.library_id, res.business.business_key, run.id);
+        persist(run, res.business);
+        emit(run.id, { type: 'business_added', business: res.business, counts: run.counts });
+      } else if (res.status === 'updated') {
+        db.markSeen(rec.library_id, res.business.business_key, run.id);
+        persist(run, res.business);
+        emit(run.id, { type: 'business_updated', business: res.business, counts: run.counts });
+      }
+    },
+    onProgress: (info) => {
+      emit(run.id, {
+        type: 'harvest_progress',
+        country: countryName(info.country), rawSeen: run.counts.rawSeen,
+        kept: run.counts.kept, skippedKnown: run.counts.skippedKnown, target: run.target,
+      });
+    },
+    onError: (info) => {
+      run.errors.push({ scope: info.scope, message: info.message, ts: now() });
+      emit(run.id, { type: 'error', scope: info.scope, message: info.message, recoverable: true });
+    },
+  }).catch((err) => {
+    run.errors.push({ scope: 'harvest', message: err.message, ts: now() });
+    emit(run.id, { type: 'error', scope: 'harvest', message: err.message, recoverable: true });
+  });
 
-  const total = slugs.length;
-  let done = 0;
-  bus.emit(sessionId, { type: 'contact_started', total });
+  emit(run.id, { type: 'phase_done', phase: 'harvesting', kept: run.counts.kept });
+}
+
+// ── Phase 2: Facebook contact enrichment ─────────────────────────────────────
+async function contactsPhase(run) {
+  run.phase = 'contacts';
+  const targets = run.businesses.filter(b => b.page_url && /facebook\.com/.test(b.page_url));
+  emit(run.id, { type: 'phase_started', phase: 'contacts', total: targets.length });
+  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'contacts', done: 0 }); return; }
 
   const ctx = await getContext();
-  const queue = slugs.slice();
-  const workers = Math.min(config.enrichConcurrency, Math.max(1, queue.length));
-  const tasks = [];
+  await runPool(targets, config.enrichConcurrency, run, async (page, biz) => {
+    store.patchBusiness(run, biz.business_key, { contact_status: 'pending' });
+    emit(run.id, { type: 'contact_progress', current: biz.page_name, done: run.counts.contactsDone, total: targets.length });
+    let patch;
+    try {
+      patch = await scrapeFacebookContact(page, biz.page_url);
+    } catch (err) {
+      patch = { contact_status: 'failed' };
+      logItemError(run, 'contact', biz, err);
+    }
+    store.patchBusiness(run, biz.business_key, patch);
+    db.updateBusiness(biz.business_key, patch);
+    run.counts.contactsDone++;
+    emit(run.id, {
+      type: 'business_enriched', business_key: biz.business_key, patch,
+      done: run.counts.contactsDone, total: targets.length,
+    });
+  }, () => ctx);
 
-  for (let w = 0; w < workers; w++) {
-    tasks.push((async () => {
-      const wp = await ctx.newPage();
+  emit(run.id, { type: 'phase_done', phase: 'contacts', done: run.counts.contactsDone });
+}
+
+// ── Phase 3: Google owner enrichment ─────────────────────────────────────────
+async function googlePhase(run) {
+  run.phase = 'google';
+  const targets = run.businesses.filter(b => b.page_name);
+  emit(run.id, { type: 'phase_started', phase: 'google', total: targets.length });
+  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'google', done: 0 }); return; }
+
+  const ctx = await getContext();
+  await runPool(targets, Math.min(2, config.enrichConcurrency), run, async (page, biz) => {
+    store.patchBusiness(run, biz.business_key, { google_status: 'pending' });
+    emit(run.id, { type: 'google_progress', current: biz.page_name, done: run.counts.googleDone, total: targets.length });
+    let patch;
+    try {
+      patch = await scrapeOwnerInfo(page, biz.page_name, countryName(biz.country));
+    } catch (err) {
+      patch = { google_status: 'failed' };
+      logItemError(run, 'google', biz, err);
+    }
+    delete patch.google_error;
+    store.patchBusiness(run, biz.business_key, patch);
+    db.updateBusiness(biz.business_key, patch);
+    run.counts.googleDone++;
+    emit(run.id, {
+      type: 'business_owner', business_key: biz.business_key, patch,
+      done: run.counts.googleDone, total: targets.length,
+    });
+  }, () => ctx);
+
+  emit(run.id, { type: 'phase_done', phase: 'google', done: run.counts.googleDone });
+}
+
+// ── Shared worker pool ───────────────────────────────────────────────────────
+// Runs `worker(page, item)` over items with N reusable pages, honoring cancel.
+async function runPool(items, concurrency, run, worker, getCtx) {
+  const ctx = getCtx();
+  const queue = items.slice();
+  const n = Math.min(Math.max(1, concurrency), queue.length);
+  const workers = [];
+  for (let i = 0; i < n; i++) {
+    workers.push((async () => {
+      let page;
+      try { page = await (await ctx).newPage(); } catch { return; }
       try {
         while (queue.length) {
-          if (session.contactCancel) return;
-          const slug = queue.shift();
-          const ids = session.adsByPageSlug.get(slug);
-          if (!ids?.length) continue;
-          const sampleLead = session.leadsByLibraryId.get(ids[0]);
-          const pageName = sampleLead?.page_name || slug;
-
-          bus.emit(sessionId, { type: 'contact_progress', done, total, current: pageName, page_slug: slug });
-          store.patchLeadsByPageSlug(session, slug, { contact_status: 'pending' });
-
-          try {
-            const patch = await scrapeFacebookContact(wp, sampleLead.page_url);
-            session.contactDoneSlugs.add(slug);
-            const patched = store.patchLeadsByPageSlug(session, slug, patch);
-            for (const lead of patched) {
-              bus.emit(sessionId, { type: 'lead_contact', library_id: lead.library_id, page_slug: slug, patch });
-            }
-          } catch (err) {
-            store.patchLeadsByPageSlug(session, slug, { contact_status: 'failed' });
-            session.errors.push({ scope: 'contact', slug, message: err.message });
-            bus.emit(sessionId, { type: 'error', scope: 'contact', page_slug: slug, message: err.message, recoverable: true });
-          }
-          done++;
-          bus.emit(sessionId, { type: 'contact_progress', done, total, current: pageName, page_slug: slug });
+          if (run.cancelRequested) return;
+          const item = queue.shift();
+          try { await worker(page, item); }
+          catch (err) { run.errors.push({ scope: 'worker', message: err.message, ts: now() }); }
         }
       } finally {
-        try { await wp.close(); } catch {}
+        try { await page?.close(); } catch {}
       }
     })());
   }
-  await Promise.all(tasks);
-
-  session.contactEnriching = false;
-  const withContact = session.leads.filter(l => l.contact_status === 'enriched').length;
-  bus.emit(sessionId, { type: 'contact_finished', total, enriched: withContact });
+  await Promise.all(workers);
 }
 
-export function stopContactEnrichment(sessionId) {
-  const session = store.get(sessionId);
-  if (!session) return false;
-  session.contactCancel = true;
+// ── helpers ──────────────────────────────────────────────────────────────────
+function persist(run, business) {
+  db.upsertBusiness({ ...business, run_id: run.id });
+}
+
+function logItemError(run, scope, biz, err) {
+  run.errors.push({ scope, business: biz.page_name, message: err.message, ts: now() });
+  emit(run.id, { type: 'error', scope, message: `${biz.page_name}: ${err.message}`, recoverable: true });
+}
+
+function finalize(run, status, message) {
+  run.status = status;
+  run.phase = 'done';
+  run.finishedAt = now();
+  if (status === 'stopped') run.stoppedAt = now();
+  emit(run.id, {
+    type: 'run_finished', status, message: message || null,
+    counts: run.counts, dbStats: db.stats(), snapshot: store.snapshot(run),
+  });
+}
+
+export function stopRun(runId) {
+  const run = store.get(runId);
+  if (!run) return false;
+  run.cancelRequested = true;
   return true;
 }
 
-function updateCompanyCount(sessionId, session, pageSlug) {
-  if (!pageSlug) return;
-  const ids = session.adsByPageSlug.get(pageSlug) || [];
-  const count = ids.length;
-  const patched = store.patchLeadsByPageSlug(session, pageSlug, { company_total_ads: count });
-  bus.emit(sessionId, { type: 'company_count_updated', page_slug: pageSlug, company_total_ads: count });
-  // Re-score because company_total_ads contributes to the score.
-  for (const lead of patched) applyScore(sessionId, session, lead);
-}
-
-function applyScore(sessionId, session, lead) {
-  try {
-    // Re-score on every relevant update (enrichment, company_total_ads). Cheap
-    // to recompute; uses the session's mode (leadgen | ecom).
-    const result = scoreLead(lead, session.mode);
-    session.scoresByPageSlug.set(lead.page_slug, result);
-    const patch = {
-      relevance_score: result.score,
-      relevance_tier: result.tier,
-      relevance_reasons: result.reasons,
-      is_lead_gen_ad: result.is_lead_gen_ad,
-      search_match: result.search_match,
-      relevance_status: result.relevance_status,
-    };
-    Object.assign(lead, patch);
-    bus.emit(sessionId, {
-      type: 'lead_scored',
-      library_id: lead.library_id,
-      page_slug: lead.page_slug,
-      patch,
-    });
-  } catch (err) {
-    lead.relevance_status = 'failed';
-    lead.relevance_tier = 'cool';
-    session.errors.push({ scope: 'scoring', library_id: lead.library_id, message: err.message });
-  }
-}
-
-export function stopSession(sessionId) {
-  const session = store.get(sessionId);
-  if (!session) return false;
-  session.cancelRequested = true;
-  session.stoppedAt = new Date().toISOString();
-  return true;
-}
+function emit(runId, ev) { bus.emit(runId, ev); }
+function now() { return new Date().toISOString(); }

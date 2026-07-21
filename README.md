@@ -1,49 +1,45 @@
-# Meta Ad Library — Lead Engine
+# Ad Library Harvester
 
-A real-time tool that mines the **Meta Ad Library** and turns the firehose of running ads into a clean, **ICP-scored list of qualified leads** — streamed live into a premium dashboard and exportable as CSV.
+A headless tool that mines the **Meta Ad Library** and turns it into a clean, deduplicated list of **unique businesses** — each enriched with follower counts, Facebook contact details (email / phone / website), and a best-effort owner/founder lookup — streamed live into a modern dashboard and exportable as a single CSV.
 
-It runs in **two modes**:
-
-- **Lead-gen leads** — finds businesses that close deals on calls (real estate, mortgage, home services, insurance, legal, coaching). Built for selling appointment-setting / voice-AI / lead-qualification services to them. Pure ecommerce is treated as a *negative* signal.
-- **Ecom brands** — finds Shopify-style ecommerce brands actively running ads (fashion, beauty, home, etc.).
-
-No database. No API keys. No LLM. All scoring is **deterministic and rules-based**, so every result is explainable and reproducible.
+It is a **general-purpose** harvester: give it any keyword and any combination of Meta's own filters, and it captures every advertiser it can find, **one row per business**. There are no niche presets or scoring modes — it works the same for real estate, dentists, ecommerce, coaches, or anything else.
 
 ---
 
-## Why this exists
+## What it does
 
-A raw Ad Library search returns thousands of ads — most of them junk for any given sales motion: one-off boosted posts, random individuals, pure e-commerce, link-in-bio spam. This tool applies the signals that actually separate a *real, sellable lead* from noise:
+The moment you press **Start**, four phases run automatically, in sequence:
 
-- **Page-level signals** — advertiser category, follower count, whether they have a real linked website.
-- **Ad-behaviour signals** — how many ads they run, how long ads have been live, how many creative variants (a brand testing vs. a one-off).
-- **Destination signals** — is the click going to a real landing page, a WhatsApp/lead-form funnel, a link-in-bio aggregator, a bare social profile, or a Shopify store?
+1. **Harvest** — drives a headless Chromium over the Ad Library and intercepts Meta's internal GraphQL feed (far more robust than scraping the visible page). It captures **one unique ad per business** — the *longest continuously running* one — up to your target (default **5,000**). It keeps scrolling until the target is reached or the feed genuinely runs out of ads. It never opens a browser window.
+2. **De-dupe across searches** — every business is stored in a local SQLite database. On future searches, ads/businesses you already captured are **skipped automatically**, so you only ever see new results.
+3. **Facebook contacts** — visits each business's Facebook page and scrapes email, phone, and website.
+4. **Owner lookup** — best-effort web search (Google, with a Bing fallback) for the owner / founder / CEO.
 
-Each advertiser gets a **0–100 relevance score** and a tier — **Hot / Warm / Cool / Cold** — with the reasons attached, so you can trust (and audit) the ranking.
+Every phase is wrapped so a failure is logged and streamed but **never crashes the run**. The **Export** button stays disabled until all four phases finish.
+
+### What you get per business
+
+Followers · advertiser category · country · active status · ad start date & days running · CTA · media format · ad copy · destination link · Facebook page link · ad-snapshot link · email · phone · website · owner name & title · library id · numeric page id.
 
 ---
 
-## What you get per lead
+## Filters (mirrors the Meta Ad Library)
 
-| Field | Source |
-|---|---|
-| Relevance score + tier + reasons | computed |
-| Page name, partner, page link | ad card |
-| Advertiser category (niche) | "About the advertiser" drawer |
-| Active ads for that advertiser | grouped live across results |
-| Days running / start date | ad card |
-| Creative variants | ad card |
-| Platforms (FB / IG / Messenger / Audience Network) | ad card |
-| FB + IG follower counts | "About the advertiser" drawer |
-| Display domain + decoded destination URL | ad card (tracking params stripped) |
-| CTA + headline + ad-text snippet | ad card |
-| Ad snapshot permalink | built from Library ID |
+The filter bar reproduces the Ad Library's own filters and their dynamic behavior:
+
+- **Keyword** + **match type** — broad (any order) or exact phrase
+- **Countries** — multi-select, or *All countries* (alphabetically ordered)
+- **Ad category** — All ads · Issues/elections/politics · Properties · Employment · Financial products. The last three are legally-restricted transparency categories that only exist in the **US & Canada**, so they are automatically greyed out for other countries — exactly as Meta does.
+- **Active status** · **Media type** · **Platforms** · **Languages** · **Ad-delivery date range**
+- **Target** — how many unique businesses to collect before stopping
+
+Every filter has an **ⓘ** marker that explains what it does on hover.
 
 ---
 
 ## Quick start
 
-**Requirements:** Node.js 18+ and macOS/Linux/WSL.
+**Requirements:** Node.js **22.5+** (for the built-in `node:sqlite`) and macOS / Linux / WSL.
 
 ```bash
 # 1. Backend
@@ -67,53 +63,25 @@ cd server && npm run dev
 cd client && npm run dev
 ```
 
-Open **http://localhost:5173**. The frontend proxies `/api/*` to the backend, so that's the only URL you need.
-
-A Chromium window opens while scraping (visible by default so you can watch it work and spot any login wall). Flip `HEADFUL=false` in `server/.env` once you trust a run.
+Open **http://localhost:5173**. The scraper runs **headless** — no browser window opens.
 
 ---
 
-## How to use it to its full potential
+## How to use it
 
-### 1. Pick the right mode
-- Selling a service to businesses that take sales calls → **Lead-gen leads**.
-- Prospecting ecommerce brands → **Ecom brands**.
+1. **Enter a keyword** (e.g. `real estate`, `dentist`, `fitness coaching`) and **pick one or more countries**. These two fields are all you need to start.
+2. **(Optional) refine with filters** — click **Filters** to expand ad category, active status, media type, platforms, languages, and a start-date range. Hover any **ⓘ** to see what a filter does.
+3. **Set a target** — the number of unique businesses to collect (default 5,000). The harvester stops early only if the Ad Library genuinely runs out of matching ads.
+4. **Press “Start scraping.”** The dashboard comes alive:
+   - **Metric cards** at the top count businesses, followers, owners found, and email/phone/website — with rolling animated numbers that stay exactly in sync with the table.
+   - A **Harvest → Contacts → Owners → Done** stepper shows live progress bars for each phase.
+   - **Rows stream into the table** as businesses are found, then fill in with contacts and owners as enrichment completes.
+   - The **Run status** panel in the sidebar shows the current phase and how many businesses were kept vs. skipped (already in your database).
+5. **Stop any time** with the red **Stop** button — whatever has been collected is kept.
+6. **Export** — when every phase finishes, the green **Export CSV** button activates. One click downloads every business from the run, with all its data, as a single UTF-8 CSV.
+7. **Start fresh whenever you like** — the **trash icon** next to the “N in DB” badge clears the local database (with a confirmation) so previously-found businesses are no longer skipped.
 
-The mode swaps the entire scoring dictionary, so the same search returns very different rankings.
-
-### 2. Choose location + ad category wisely
-- The **location** drives Meta's `country` filter. For real-estate work, target the markets your buyers are in (US, CA, UK, AU, UAE, Saudi, Egypt are all in the picker).
-- **Ad category** matters: Meta only supports **Properties / Financial / Employment** categories in the **US and Canada**. The picker greys these out automatically for other countries (Meta silently breaks the search otherwise). Use **All ads** everywhere else — the scorer still does the filtering from the ad copy and advertiser category.
-  - For US/CA real-estate searches, **Properties** dramatically cuts noise.
-  - For US/CA mortgage searches, use **Financial products and services**.
-
-### 3. Use the curated keyword presets
-Open **Browse curated presets** under the keyword box. Presets are grouped by intent and tier and match the active mode:
-- **Lead-gen:** real-estate core, cash buyers / investors, mortgage, MENA real estate, adjacent high-ticket verticals (solar, roofing, insurance, legal, dental, funding, coaching).
-- **Ecom:** fashion & apparel, beauty & skincare, home & lifestyle.
-
-Click "Add all" on a tier, or cherry-pick individual keywords. Keyword order = scrape order (drag/reorder with the arrows).
-
-### 4. Set the ad cap
-**Max ads to scan per keyword** (100 / 200 / 500, or a custom value up to 500). Higher = more coverage but longer runs. 200 is a good default; bump to 500 for thorough sweeps of competitive keywords.
-
-### 5. Read the results live
-- Rows stream in as they're discovered; follower/category cells shimmer, then fill when enrichment completes.
-- The **Relevance** column is the first column — sort by it (default) and work top-down.
-- **Tier filter chips** above the table; **Cold is hidden by default**. Hover any relevance badge to see *why* it scored that way.
-- Mission-control bar shows live counts: ads found, enriched, companies, and Hot/Warm/Cool/Cold breakdown.
-
-### 6. Export
-Hit **Export leads** → choose:
-- **Scope:** Hot + Warm (default, outreach-ready) / All scored / Everything.
-- **Rows:** one row per ad, or one row per company (deduped, with total ad count + matched keywords).
-
-CSV is UTF-8 with a BOM so it opens cleanly in Excel/Sheets.
-
-### Tips for the best lead quality
-- **Run focused batches** (10–20 keywords) rather than everything at once — sequential scraping is human-paced and Meta rate-limits aggressive runs.
-- **Lead-gen mode rewards** advertisers with 5+ active ads, ads running 30+ days, a real landing page, and a matching advertiser category. Those are your hottest leads.
-- **The "company" export mode** is best for outreach lists — one row per business with their total active-ad count as a buying-intent signal.
+> **Tip:** because businesses are deduplicated against the database, you can run the same keyword repeatedly over time and only ever get *new* advertisers each run.
 
 ---
 
@@ -122,74 +90,67 @@ CSV is UTF-8 with a BOM so it opens cleanly in Excel/Sheets.
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8787` | Backend port |
-| `HEADFUL` | `true` | Show the Chromium window while scraping |
-| `SLOW_MO_MS` | `0` | Extra slow-mo per action (debugging) |
-| `MAX_CARDS_PER_KEYWORD` | `200` | Default ad cap (UI overrides per search) |
-| `MAX_SCROLL_MS` | `180000` | Hard ceiling per keyword (3 min) |
-| `STABLE_SCROLLS_TO_STOP` | `2` | Exit after N scrolls that yield no new ads |
-| `SCROLL_SETTLE_MS` | `2500` | Pause after every scroll so lazy-loaded ads render |
-| `NO_NEW_ADS_GRACE_MS` | `8000` | If a scroll shows no new ads, wait this long and re-check before giving up |
-| `ENRICH_CONCURRENCY` | `2` | Parallel "See ad details" drawers |
-| `STORAGE_STATE` | — | Optional path to a Playwright session JSON for logged-in scraping |
+| `HEADFUL` | `false` | Set `true` to watch the browser (debugging only) |
+| `TARGET_ADS` | `5000` | Default harvest target (the UI overrides this per search) |
+| `MAX_RUN_MS` | `2700000` | Safety ceiling for a whole harvest (45 min) |
+| `STABLE_SCROLLS_TO_STOP` | `5` | Stop after N scrolls that surface no new ads |
+| `SCROLL_SETTLE_MS` | `2200` | Pause after each scroll so the next feed page loads |
+| `ENRICH_CONCURRENCY` | `3` | Parallel pages for contact / owner enrichment |
+| `GOOGLE_ENRICH` | `true` | Toggle the automatic owner-lookup phase |
+| `DB_PATH` | `server/data/leads.db` | SQLite database location |
+| `STORAGE_STATE` | — | Optional Playwright session JSON for logged-in scraping |
 
 ---
 
 ## Architecture
 
 ```
-server/  (Node + Fastify + Playwright, Server-Sent Events)
+server/  (Node + Fastify + Playwright + node:sqlite, Server-Sent Events)
   src/
-    index.js            REST + SSE endpoints
-    config.js           .env loader
-    locations.js        Canonical Meta country list + 5 ad categories
-    keywords.js         Tiered keyword presets (lead-gen + ecom)
-    urlBuilder.js        Ad Library search URL builder
-    store.js            In-memory session state (no DB)
-    eventStream.js      SSE bus with per-session buffer
+    index.js             REST + SSE endpoints
+    config.js            .env loader
+    filters.js           Full Meta filter definitions, help text + validation
+    urlBuilder.js        Ad Library search-URL builder
+    db.js                SQLite: seen_ads + businesses (dedup + persistence)
+    store.js             Run state + "one longest-running ad per business"
+    orchestrator.js      Harvest → contacts → owner pipeline (auto, resilient)
+    exporter.js          Single CSV export
     scraper/
-      engine.js         Playwright discover + enrich passes
-      parsers.js        followers / dates / link-decode / page-slug
-      humanize.js       jittered delays + human-like scrolling
-    scorer.js           Rules-based scorer (lead-gen + ecom dictionaries)
-    orchestrator.js     Per-keyword sequencing, scoring, event fan-out
-    csvExporter.js      Per-ad and per-company CSV (tier-aware)
+      engine.js          Headless GraphQL-feed harvester
+      feedParser.js      GraphQL node → normalized ad record
+      contactScraper.js  Facebook page → email / phone / website
+      googleEnrichment.js  Best-effort owner / founder lookup (Google + Bing)
+      parsers.js         followers / dates / link-decode helpers
+      humanize.js        jittered delays + human-like scrolling
 
-client/  (Vite + React + Tailwind + Framer Motion)
+client/  (Vite + React + Tailwind + Radix + lucide-react)
   src/
-    App.jsx
-    lib/                api client, SSE reducer, formatters
-    components/         SetupPanel, LocationAutocomplete, AdCategorySelect,
-                        KeywordChips, StatusBar, ResultsTable, RelevanceBadge,
-                        ExportButton, ThemeToggle
+    App.jsx              Sidebar + dashboard layout
+    lib/                 api client, SSE reducer, formatters
+    components/          FilterPanel, Select, MultiSelect, InfoTip,
+                         MetricsBar, AnimatedNumber (odometer), ProgressPanel,
+                         ResultsTable, ExportButton, ClearDbButton
 ```
 
-**Flow:** the UI creates a session → subscribes to its SSE stream → the orchestrator drives Playwright through each keyword (discover ads, then enrich one advertiser per page and fan the data out to all their ads) → every advertiser is scored once and patched across their rows → results stream into the table and can be exported at any time.
+**Data flow:** the UI creates a run → subscribes to its SSE stream → the orchestrator drives the headless browser through harvest + enrichment, persisting to SQLite and fanning typed events out → metrics and rows update live, and the single CSV export unlocks once everything is done. Metrics are derived from the live business array, so the on-screen numbers always equal the table rows.
 
----
+**API endpoints**
 
-## How scoring works (rules, not magic)
-
-Each lead runs through three layers in the active mode's dictionary (`server/src/scorer.js`):
-
-1. **Hard excludes** → immediate *Cold*: non-business pages (Personal Blog, Public Figure, Community), and — in ecom mode — destinations that aren't a real store (WhatsApp, Linktree, Google Forms, bare social profiles).
-2. **Weighted ICP matching** → advertiser category, page-name tokens, domain tokens, ad-copy patterns, and CTA/intent signals each contribute points.
-3. **Behavioural boosts** → active-ad count, ad age, creative variants, multi-platform spread, follower count, video creative.
-
-Final score is clamped to 0–100 and mapped to a tier. The dictionaries are plain arrays — edit them to tune the ICP as you learn from real runs.
-
-| Score | Tier | Meaning |
-|---|---|---|
-| 81–100 | Hot | Direct ICP fit — prioritise |
-| 61–80 | Warm | Strong fit — second priority |
-| 31–60 | Cool | Review before contacting |
-| 0–30 | Cold | Off-ICP — hidden by default |
+| Method & path | Purpose |
+|---|---|
+| `GET /api/filters` | All Meta filter definitions + help text |
+| `GET /api/db/stats` · `POST /api/db/clear` | Database size · wipe it |
+| `POST /api/runs` | Create a run from a filter set |
+| `POST /api/runs/:id/start` · `/stop` | Begin / cancel the pipeline |
+| `GET /api/runs/:id` | Snapshot (for refresh / late subscribers) |
+| `GET /api/runs/:id/events` | Live SSE stream |
+| `GET /api/runs/:id/export` | Single CSV (only after the run is done) |
 
 ---
 
 ## Notes & caveats
 
-- Meta's Terms prohibit scraping; this tool is for research/educational use. Keep request volume modest and human-paced (the scraper already jitters and rate-limits itself).
-- Meta changes its DOM frequently. Selectors are anchored on stable text/aria (`Library ID:`, `About the advertiser`, `See ad details`) rather than obfuscated class names. If a field stops extracting, start in `server/src/scraper/engine.js`.
-- Properties / Financial / Employment ad categories only exist in the US and Canada — use **All ads** elsewhere.
-- Some advertisers hide follower data; those rows keep `enrichment_status: failed` but are still scored from the data available.
-- Results live in memory only and are gone when the server restarts — export what you want to keep.
+- Meta's Terms prohibit scraping; this tool is for research/educational use. It runs headless and human-paced.
+- The owner lookup is inherently unreliable — search engines throw consent walls and CAPTCHAs, and many small businesses publish no owner data. It fills what it can and marks the rest `not_found` / `blocked`, never blocking the run.
+- Meta changes its internals frequently. Selectors are anchored on the GraphQL feed rather than page markup; if a field stops extracting, start in `server/src/scraper/feedParser.js`.
+- Results and the dedup database persist in `server/data/leads.db`. Delete it (or use the in-app trash button) to start completely fresh.

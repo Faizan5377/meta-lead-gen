@@ -14,6 +14,12 @@ build/
 *.local
 meta-session.json
 
+# Local database
+server/data/
+*.db
+*.db-journal
+*.sqlite
+
 # Internal spec & tooling — not part of the shipped app
 META_ADS_LIBRARY_SCRAPER_SPEC.md
 .claude/

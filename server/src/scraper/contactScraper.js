@@ -112,8 +112,14 @@ export async function scrapeFacebookContact(page, pageUrl) {
   const url = aboutContactUrl(pageUrl);
   if (!url) return { contact_status: 'failed' };
 
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await jitter(2500, 3800);
+  // Don't let a slow FB page stall a worker — cap the nav and parse whatever
+  // rendered even if it didn't fully settle.
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  } catch {
+    if (!page.url().includes('facebook.com')) return { contact_status: 'failed' };
+  }
+  await jitter(2000, 3200);
 
   // Dismiss the login modal (the X / Close button). Try a few strategies.
   for (const sel of ['div[role="dialog"] [aria-label="Close"]', '[aria-label="Close"]', 'div[aria-label="Close"]']) {

@@ -96,3 +96,17 @@ export function snippet(text, max = 300) {
   const cleaned = String(text).replace(/\s+/g, ' ').trim();
   return cleaned.length > max ? cleaned.slice(0, max - 1) + '…' : cleaned;
 }
+
+// Unix seconds (as used by the Ad Library GraphQL feed) → ISO date (YYYY-MM-DD).
+export function isoFromUnix(secs) {
+  const n = Number(secs);
+  if (!n || Number.isNaN(n)) return null;
+  const d = new Date(n * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+export function hostFromUrl(url) {
+  if (!url) return null;
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return null; }
+}

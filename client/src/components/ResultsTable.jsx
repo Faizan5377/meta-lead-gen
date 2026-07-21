@@ -1,303 +1,145 @@
-import { AnimatePresence, motion } from 'framer-motion';
+import { Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { formatFollowers, safeHost } from '../lib/format.js';
-import RelevanceBadge from './RelevanceBadge.jsx';
 
-const TIER_ORDER = { hot: 0, warm: 1, cool: 2, cold: 3 };
-
-const PLATFORM_GLYPH = {
-  Facebook: 'F',
-  Instagram: 'IG',
-  Messenger: 'M',
-  'Audience Network': 'AN',
-  Threads: 'T',
-};
-
-function CellEnrichable({ value, status, children }) {
-  if (status === 'pending') {
-    return <div className="h-3 w-14 rounded shimmer" />;
-  }
-  if (status === 'failed' && !value) {
-    return <span className="text-ink-600">—</span>;
-  }
-  return children;
+function ActiveBadge({ active }) {
+  return active
+    ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">Active</span>
+    : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">Inactive</span>;
 }
 
-function ContactCell({ lead, kind }) {
-  const status = lead.contact_status;
-  const value = kind === 'email' ? lead.contact_email
-    : kind === 'phone' ? lead.contact_phone
-    : lead.contact_website;
-
-  if (status === 'idle') return <span className="text-ink-700">·</span>;
-  if (status === 'pending') return <div className="h-3 w-16 rounded shimmer" />;
-  if (!value) return <span className="text-ink-600">—</span>;
-
-  if (kind === 'email') {
-    return <a href={`mailto:${value}`} className="text-xs text-accent-300 hover:text-accent-200 truncate block" title={value}>{value}</a>;
-  }
-  if (kind === 'phone') {
-    return <a href={`tel:${value}`} className="text-xs text-ink-200 hover:text-accent-200 truncate block tabular" title={value}>{value}</a>;
-  }
-  return (
-    <a href={value} target="_blank" rel="noopener noreferrer" className="text-xs text-accent-300 hover:text-accent-200 truncate block" title={value}>
-      {safeHost(value)}
-    </a>
-  );
+function Contact({ status, value, kind }) {
+  if (status === 'pending') return <span className="inline-block h-3 w-16 shimmer" />;
+  if (!value) return <span className="text-slate-300">—</span>;
+  if (kind === 'email') return <a href={`mailto:${value}`} className="text-brand-600 hover:underline" title={value}>{value}</a>;
+  if (kind === 'phone') return <a href={`tel:${value}`} className="tabular text-slate-700 hover:text-brand-600" title={value}>{value}</a>;
+  return <a href={value} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline" title={value}>{safeHost(value)}</a>;
 }
 
-export default function ResultsTable({ leads, totalCompanies }) {
-  const [tierFilter, setTierFilter] = useState('all'); // all | hot | warm | cool | cold
-  const [showCold, setShowCold] = useState(false);
-  const [search, setSearch] = useState('');
-  const [keywordFilter, setKeywordFilter] = useState('');
-  const [sort, setSort] = useState({ col: 'relevance_score', dir: 'desc' });
+function Owner({ b }) {
+  if (b.google_status === 'pending') return <span className="inline-block h-3 w-20 shimmer" />;
+  if (b.owner_name) {
+    return (
+      <div>
+        <div className="font-medium text-slate-800">{b.owner_name}</div>
+        {b.owner_title && <div className="text-[11px] text-slate-400">{b.owner_title}</div>}
+      </div>
+    );
+  }
+  if (b.google_status === 'blocked') return <span className="text-[11px] text-amber-500" title="Search engine blocked the lookup">blocked</span>;
+  return <span className="text-slate-300">—</span>;
+}
 
-  const keywords = useMemo(() => {
-    const s = new Set(leads.map(l => l.keyword).filter(Boolean));
-    return Array.from(s);
-  }, [leads]);
+const COLS = [
+  { key: 'page_name', label: 'Business', sortable: true },
+  { key: 'followers', label: 'Followers', sortable: true, align: 'right' },
+  { key: 'page_categories', label: 'Category' },
+  { key: 'country', label: 'Country' },
+  { key: 'is_active', label: 'Status' },
+  { key: 'days_running', label: 'Days', sortable: true, align: 'right' },
+  { key: 'owner', label: 'Owner' },
+  { key: 'contact_email', label: 'Email' },
+  { key: 'contact_phone', label: 'Phone' },
+  { key: 'contact_website', label: 'Website' },
+  { key: 'cta_text', label: 'CTA' },
+  { key: 'display_format', label: 'Format' },
+  { key: 'links', label: 'Links', align: 'right' },
+];
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let arr = leads.filter(l => {
-      if (tierFilter === 'all') {
-        if (!showCold && l.relevance_tier === 'cold') return false;
-      } else if (l.relevance_tier !== tierFilter) {
-        return false;
-      }
-      if (keywordFilter && l.keyword !== keywordFilter) return false;
-      if (q) {
-        const hay = `${l.page_name || ''} ${l.headline || ''} ${l.ad_text_snippet || ''} ${l.advertiser_category || ''} ${l.display_domain || ''}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+export default function ResultsTable({ businesses }) {
+  const [q, setQ] = useState('');
+  const [sort, setSort] = useState({ col: 'followers', dir: 'desc' });
 
-    arr.sort((a, b) => {
-      let av = a[sort.col];
-      let bv = b[sort.col];
-      if (sort.col === 'relevance_tier') {
-        av = TIER_ORDER[a.relevance_tier] ?? 4;
-        bv = TIER_ORDER[b.relevance_tier] ?? 4;
-      }
+  const rows = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    let arr = businesses;
+    if (s) {
+      arr = arr.filter(b =>
+        `${b.page_name || ''} ${b.owner_name || ''} ${(b.page_categories || []).join(' ')} ${b.contact_email || ''} ${b.display_domain || ''} ${b.country || ''}`
+          .toLowerCase().includes(s));
+    }
+    arr = arr.slice().sort((a, b) => {
+      let av = a[sort.col], bv = b[sort.col];
       if (av == null) av = sort.dir === 'asc' ? Infinity : -Infinity;
       if (bv == null) bv = sort.dir === 'asc' ? Infinity : -Infinity;
-      const cmp = typeof av === 'number' && typeof bv === 'number'
-        ? av - bv
-        : String(av).localeCompare(String(bv));
+      const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
       return sort.dir === 'asc' ? cmp : -cmp;
     });
-
     return arr;
-  }, [leads, tierFilter, showCold, search, keywordFilter, sort]);
+  }, [businesses, q, sort]);
 
-  function sortBy(col) {
-    setSort(s => s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' });
-  }
+  const setSortCol = (col) => setSort(s => s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' });
 
   return (
-    <div className="rounded-2xl border border-ink-800 bg-ink-900/30 backdrop-blur overflow-hidden shadow-2xl shadow-black/20">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-ink-800/80">
-        <div className="flex items-center gap-1">
-          {[
-            { v: 'all', label: 'All' },
-            { v: 'hot', label: 'Hot' },
-            { v: 'warm', label: 'Warm' },
-            { v: 'cool', label: 'Cool' },
-            { v: 'cold', label: 'Cold' },
-          ].map(t => (
-            <button
-              key={t.v}
-              onClick={() => setTierFilter(t.v)}
-              className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
-                tierFilter === t.v
-                  ? 'bg-accent-500/20 border-accent-500/50 text-accent-100'
-                  : 'border-ink-700/70 text-ink-400 hover:text-ink-200 hover:border-ink-600'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
+    <div className="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
+        <div className="relative">
+          <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search business, owner, category, email…"
+            className="w-72 rounded-xl border border-slate-200 py-1.5 pl-8 pr-3 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+          />
         </div>
-        {tierFilter === 'all' && (
-          <label className="flex items-center gap-1.5 text-xs text-ink-500 ml-1">
-            <input
-              type="checkbox"
-              checked={showCold}
-              onChange={(e) => setShowCold(e.target.checked)}
-              className="accent-accent-500"
-            />
-            Show cold
-          </label>
-        )}
-        {keywords.length > 1 && (
-          <select
-            value={keywordFilter}
-            onChange={(e) => setKeywordFilter(e.target.value)}
-            className="ml-2 text-xs rounded-md bg-ink-800/70 border border-ink-700 px-2 py-1 text-ink-200"
-          >
-            <option value="">All keywords</option>
-            {keywords.map(k => <option key={k} value={k}>{k}</option>)}
-          </select>
-        )}
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search company, copy, domain…"
-          className="ml-auto text-xs rounded-md bg-ink-800/70 border border-ink-700 px-2.5 py-1 placeholder-ink-500 text-ink-100 focus:border-accent-500 focus:outline-none w-56"
-        />
-        <div className="text-xs text-ink-500 tabular">
-          {filtered.length.toLocaleString()} / {leads.length.toLocaleString()} shown
-        </div>
+        <div className="ml-auto text-xs tabular text-slate-400">{rows.length.toLocaleString()} / {businesses.length.toLocaleString()} shown</div>
       </div>
 
-      {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-ink-900/60 backdrop-blur sticky top-0 z-10">
-            <tr className="text-left text-[10px] uppercase tracking-widest text-ink-500">
-              <Th col="relevance_score" sort={sort} onSort={sortBy}>Relevance</Th>
-              <Th col="page_name" sort={sort} onSort={sortBy}>Page</Th>
-              <Th col="keyword" sort={sort} onSort={sortBy}>Keyword</Th>
-              <Th col="advertiser_category" sort={sort} onSort={sortBy}>Category</Th>
-              <Th col="company_total_ads" sort={sort} onSort={sortBy} className="text-right">Ads</Th>
-              <Th col="days_running" sort={sort} onSort={sortBy} className="text-right">Days</Th>
-              <Th col="fb_followers" sort={sort} onSort={sortBy} className="text-right">FB</Th>
-              <Th col="ig_followers" sort={sort} onSort={sortBy} className="text-right">IG</Th>
-              <th className="px-3 py-2 font-medium">Email</th>
-              <th className="px-3 py-2 font-medium">Phone</th>
-              <th className="px-3 py-2 font-medium">Website</th>
-              <th className="px-3 py-2 font-medium">Platforms</th>
-              <th className="px-3 py-2 font-medium">CTA · Headline</th>
-              <th className="px-3 py-2 font-medium">Domain</th>
-              <th className="px-3 py-2 font-medium text-right">Links</th>
+          <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
+            <tr>
+              {COLS.map(c => (
+                <th
+                  key={c.key}
+                  onClick={() => c.sortable && setSortCol(c.key)}
+                  className={`whitespace-nowrap px-3 py-2 font-medium ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.sortable ? 'cursor-pointer select-none hover:text-slate-600' : ''}`}
+                >
+                  {c.label}{sort.col === c.key && <span className="ml-0.5">{sort.dir === 'asc' ? '▲' : '▼'}</span>}
+                </th>
+              ))}
             </tr>
           </thead>
-          <tbody>
-            <AnimatePresence initial={false}>
-              {filtered.map(lead => (
-                <motion.tr
-                  key={lead.library_id}
-                  layout
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className="border-t border-ink-800/60 hover:bg-ink-800/30 transition-colors"
-                >
-                  <td className="px-3 py-2.5"><RelevanceBadge lead={lead} /></td>
-                  <td className="px-3 py-2.5 max-w-[220px]">
-                    <div className="font-medium text-ink-100 truncate">{lead.page_name || '—'}</div>
-                    {lead.partner_name && (
-                      <div className="text-[11px] text-ink-500 truncate">with {lead.partner_name}</div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-ink-800/80 text-ink-300">{lead.keyword}</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-ink-300 max-w-[150px] truncate">
-                    <CellEnrichable value={lead.advertiser_category} status={lead.enrichment_status}>
-                      {lead.advertiser_category || <span className="text-ink-600">—</span>}
-                    </CellEnrichable>
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular text-ink-200">
-                    {lead.company_total_ads || 1}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular text-ink-300">
-                    {lead.days_running ?? <span className="text-ink-600">—</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular" title={lead.fb_followers ? lead.fb_followers.toLocaleString() : ''}>
-                    <CellEnrichable value={lead.fb_followers} status={lead.enrichment_status}>
-                      {lead.fb_followers != null ? formatFollowers(lead.fb_followers) : <span className="text-ink-600">—</span>}
-                    </CellEnrichable>
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular" title={lead.ig_followers ? lead.ig_followers.toLocaleString() : ''}>
-                    <CellEnrichable value={lead.ig_followers} status={lead.enrichment_status}>
-                      {lead.ig_followers != null ? formatFollowers(lead.ig_followers) : <span className="text-ink-600">—</span>}
-                    </CellEnrichable>
-                  </td>
-                  <td className="px-3 py-2.5 max-w-[180px]"><ContactCell lead={lead} kind="email" /></td>
-                  <td className="px-3 py-2.5 max-w-[140px]"><ContactCell lead={lead} kind="phone" /></td>
-                  <td className="px-3 py-2.5 max-w-[150px]"><ContactCell lead={lead} kind="website" /></td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex gap-1">
-                      {(lead.platforms || []).map(p => (
-                        <span
-                          key={p}
-                          title={p}
-                          className="text-[10px] tabular w-6 h-5 rounded bg-ink-800/80 border border-ink-700 text-ink-300 inline-flex items-center justify-center"
-                        >
-                          {PLATFORM_GLYPH[p] || p[0]}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5 max-w-[280px]">
-                    <div className="text-xs text-accent-300/90">{lead.cta || '—'}</div>
-                    <div className="text-xs text-ink-400 truncate" title={lead.headline}>
-                      {lead.headline || lead.ad_text_snippet?.slice(0, 80) || ''}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5 max-w-[160px]">
-                    <div className="text-xs text-ink-300 truncate" title={lead.destination_url}>
-                      {lead.display_domain || (lead.destination_url ? safeHost(lead.destination_url) : '—')}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center justify-end gap-1">
-                      {lead.ad_snapshot_url && (
-                        <LinkBtn href={lead.ad_snapshot_url} title="Ad snapshot">⎘</LinkBtn>
-                      )}
-                      {lead.page_url && (
-                        <LinkBtn href={lead.page_url} title="Page">FB</LinkBtn>
-                      )}
-                      {lead.destination_url && (
-                        <LinkBtn href={lead.destination_url} title="Destination">↗</LinkBtn>
-                      )}
-                    </div>
-                  </td>
-                </motion.tr>
-              ))}
-            </AnimatePresence>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map(b => (
+              <tr key={b.library_id} className="row-in align-top hover:bg-slate-50/70">
+                <td className="max-w-[200px] px-3 py-2.5">
+                  <div className="truncate font-medium text-slate-800" title={b.page_name}>{b.page_name || '—'}</div>
+                  {b.display_domain && <div className="truncate text-[11px] text-slate-400">{b.display_domain}</div>}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular text-slate-700" title={b.followers?.toLocaleString()}>
+                  {b.followers != null ? formatFollowers(b.followers) : <span className="text-slate-300">—</span>}
+                </td>
+                <td className="max-w-[140px] px-3 py-2.5">
+                  <span className="truncate text-slate-600" title={(b.page_categories || []).join(', ')}>{(b.page_categories || [])[0] || <span className="text-slate-300">—</span>}</span>
+                </td>
+                <td className="px-3 py-2.5 text-slate-600">{b.country || '—'}</td>
+                <td className="px-3 py-2.5"><ActiveBadge active={b.is_active} /></td>
+                <td className="px-3 py-2.5 text-right tabular text-slate-600">{b.days_running ?? <span className="text-slate-300">—</span>}</td>
+                <td className="max-w-[160px] px-3 py-2.5"><Owner b={b} /></td>
+                <td className="max-w-[190px] truncate px-3 py-2.5"><Contact status={b.contact_status} value={b.contact_email} kind="email" /></td>
+                <td className="max-w-[140px] truncate px-3 py-2.5"><Contact status={b.contact_status} value={b.contact_phone} kind="phone" /></td>
+                <td className="max-w-[150px] truncate px-3 py-2.5"><Contact status={b.contact_status} value={b.contact_website} kind="website" /></td>
+                <td className="max-w-[120px] truncate px-3 py-2.5 text-slate-600" title={b.cta_text}>{b.cta_text || <span className="text-slate-300">—</span>}</td>
+                <td className="px-3 py-2.5 text-[11px] text-slate-500">{b.display_format || '—'}</td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center justify-end gap-1">
+                    {b.ad_snapshot_url || b.library_id ? (
+                      <a href={b.ad_snapshot_url || `https://www.facebook.com/ads/library/?id=${b.library_id}`} target="_blank" rel="noreferrer" title="Ad in Library" className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">Ad</a>
+                    ) : null}
+                    {b.page_url && <a href={b.page_url} target="_blank" rel="noreferrer" title="Facebook page" className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">FB</a>}
+                    {b.link_url && <a href={b.link_url} target="_blank" rel="noreferrer" title="Destination" className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">↗</a>}
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
-        {filtered.length === 0 && (
-          <div className="px-6 py-16 text-center text-ink-500 text-sm">
-            {leads.length === 0 ? 'No leads yet — Start a session to populate the table.' : 'No leads match the current filters.'}
+        {rows.length === 0 && (
+          <div className="px-6 py-14 text-center text-sm text-slate-400">
+            {businesses.length === 0 ? 'No businesses yet — start a search to populate the table.' : 'No rows match your search.'}
           </div>
         )}
       </div>
     </div>
-  );
-}
-
-function Th({ children, col, sort, onSort, className = '' }) {
-  const active = sort.col === col;
-  return (
-    <th
-      onClick={() => onSort(col)}
-      className={`px-3 py-2 font-medium cursor-pointer select-none whitespace-nowrap ${className} ${active ? 'text-ink-200' : 'hover:text-ink-300'}`}
-    >
-      <span className="inline-flex items-center gap-1">
-        {children}
-        {active && <span className="text-[10px]">{sort.dir === 'asc' ? '▲' : '▼'}</span>}
-      </span>
-    </th>
-  );
-}
-
-function LinkBtn({ href, title, children }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={title}
-      className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-ink-700 text-[10px] text-ink-400 hover:text-accent-200 hover:border-accent-500/50 hover:bg-accent-500/10 transition-colors"
-    >
-      {children}
-    </a>
   );
 }
