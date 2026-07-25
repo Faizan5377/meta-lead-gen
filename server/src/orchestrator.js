@@ -14,7 +14,7 @@ import { bus } from './eventStream.js';
 import { COUNTRIES } from './filters.js';
 import { store } from './store.js';
 import { scrapeFacebookContact } from './scraper/contactScraper.js';
-import { getContext, harvest } from './scraper/engine.js';
+import { harvest, newPage } from './scraper/engine.js';
 import { scrapeOwnerInfo } from './scraper/ownerLookup.js';
 
 const countryName = (code) => COUNTRIES.find(c => c.code === code)?.name || code;
@@ -88,7 +88,6 @@ async function contactsPhase(run) {
   emit(run.id, { type: 'phase_started', phase: 'contacts', total: targets.length });
   if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'contacts', done: 0 }); return; }
 
-  const ctx = await getContext();
   await runPool(targets, config.enrichConcurrency, run, async (page, biz) => {
     store.patchBusiness(run, biz.business_key, { contact_status: 'pending' });
     emit(run.id, { type: 'contact_progress', current: biz.page_name, done: run.counts.contactsDone, total: targets.length });
@@ -106,7 +105,7 @@ async function contactsPhase(run) {
       type: 'business_enriched', business_key: biz.business_key, patch,
       done: run.counts.contactsDone, total: targets.length,
     });
-  }, () => ctx);
+  });
 
   emit(run.id, { type: 'phase_done', phase: 'contacts', done: run.counts.contactsDone });
 }
@@ -118,7 +117,6 @@ async function googlePhase(run) {
   emit(run.id, { type: 'phase_started', phase: 'google', total: targets.length });
   if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'google', done: 0 }); return; }
 
-  const ctx = await getContext();
   await runPool(targets, Math.min(2, config.enrichConcurrency), run, async (page, biz) => {
     store.patchBusiness(run, biz.business_key, { google_status: 'pending' });
     emit(run.id, { type: 'google_progress', current: biz.page_name, done: run.counts.googleDone, total: targets.length });
@@ -139,22 +137,25 @@ async function googlePhase(run) {
       type: 'business_owner', business_key: biz.business_key, patch,
       done: run.counts.googleDone, total: targets.length,
     });
-  }, () => ctx);
+  });
 
   emit(run.id, { type: 'phase_done', phase: 'google', done: run.counts.googleDone });
 }
 
 // ── Shared worker pool ───────────────────────────────────────────────────────
 // Runs `worker(page, item)` over items with N reusable pages, honoring cancel.
-async function runPool(items, concurrency, run, worker, getCtx) {
-  const ctx = getCtx();
+async function runPool(items, concurrency, run, worker) {
   const queue = items.slice();
   const n = Math.min(Math.max(1, concurrency), queue.length);
   const workers = [];
   for (let i = 0; i < n; i++) {
     workers.push((async () => {
       let page;
-      try { page = await (await ctx).newPage(); } catch { return; }
+      try { page = await newPage(); }
+      catch (err) {
+        run.errors.push({ scope: 'browser', message: `Could not open a page: ${err.message}`, ts: now() });
+        return;
+      }
       try {
         while (queue.length) {
           if (run.cancelRequested) return;

@@ -17,42 +17,76 @@ import { humanScroll, jitter } from './humanize.js';
 
 const { chromium } = pw;
 
-let browserPromise = null;
-let contextPromise = null;
+// The browser is cached across runs, but a cached handle can go stale — the
+// process can crash, run out of memory, be killed externally, or die while the
+// machine sleeps. If we kept handing out a dead handle, every later run would
+// fail with "Target page, context or browser has been closed" until the server
+// was restarted by hand. So the browser is health-checked and relaunched on
+// demand, and page creation retries once against a fresh browser.
+let browserRef = null;
+let contextRef = null;
+let launching = null;
+
+async function createContext() {
+  const browser = await chromium.launch({
+    headless: config.headless,
+    slowMo: config.slowMoMs,
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+  });
+  // Drop our cached handles the moment the browser goes away.
+  browser.on('disconnected', () => {
+    if (browserRef === browser) { browserRef = null; contextRef = null; }
+  });
+
+  const ctx = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    userAgent: config.userAgent,
+    storageState: config.storageState,
+  });
+  // Drop heavy assets we never need (we read their URLs from the feed JSON).
+  await ctx.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    if (type === 'image' || type === 'media' || type === 'font') return route.abort();
+    return route.continue();
+  });
+
+  browserRef = browser;
+  contextRef = ctx;
+  return ctx;
+}
 
 export async function getContext() {
-  if (!browserPromise) {
-    browserPromise = chromium.launch({
-      headless: config.headless,
-      slowMo: config.slowMoMs,
-      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
-    });
+  if (contextRef && browserRef?.isConnected()) return contextRef;
+  // Reset stale handles, and make concurrent callers share one launch.
+  browserRef = null;
+  contextRef = null;
+  if (!launching) {
+    launching = createContext().finally(() => { launching = null; });
   }
-  const browser = await browserPromise;
-  if (!contextPromise) {
-    contextPromise = browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      locale: 'en-US',
-      userAgent: config.userAgent,
-      storageState: config.storageState,
-    }).then(async (ctx) => {
-      // Drop heavy assets we never need (we read their URLs from the feed JSON).
-      await ctx.route('**/*', (route) => {
-        const type = route.request().resourceType();
-        if (type === 'image' || type === 'media' || type === 'font') return route.abort();
-        return route.continue();
-      });
-      return ctx;
-    });
+  return launching;
+}
+
+// Open a page, healing a dead browser once. Use this everywhere instead of
+// calling ctx.newPage() on a possibly-stale context.
+export async function newPage() {
+  try {
+    return await (await getContext()).newPage();
+  } catch (err) {
+    console.warn('[browser] page creation failed, relaunching:', err.message);
+    try { await browserRef?.close(); } catch {}
+    browserRef = null;
+    contextRef = null;
+    return await (await getContext()).newPage();
   }
-  return contextPromise;
 }
 
 export async function shutdown() {
-  try { (await contextPromise)?.close(); } catch {}
-  try { (await browserPromise)?.close(); } catch {}
-  browserPromise = null;
-  contextPromise = null;
+  try { await contextRef?.close(); } catch {}
+  try { await browserRef?.close(); } catch {}
+  browserRef = null;
+  contextRef = null;
+  launching = null;
 }
 
 // Defensively parse a GraphQL response body (Meta may prefix anti-JSON tokens or
@@ -76,7 +110,6 @@ function parseBodies(text) {
 //   onError(info)     — recoverable per-country error
 //   shouldStop()      — orchestrator: target reached or user cancelled
 export async function harvest({ filters, onAd, onProgress, onError, shouldStop }) {
-  const ctx = await getContext();
   const rawSeen = new Set();          // library_ids emitted this run
   const countries = (filters.countries?.length ? filters.countries : ['US']);
   const keywords = (filters.keywords?.length ? filters.keywords : [filters.keyword]).filter(Boolean);
@@ -92,7 +125,7 @@ export async function harvest({ filters, onAd, onProgress, onError, shouldStop }
       if (Date.now() - runStart > config.maxRunMs) break outer;
       onProgress?.({ country, keyword, rawSeen: rawSeen.size, phase: 'harvesting' });
       try {
-        await harvestCountry({ ctx, filters, country, keyword, rawSeen, onAd, onProgress, onError, shouldStop, runStart });
+        await harvestCountry({ filters, country, keyword, rawSeen, onAd, onProgress, onError, shouldStop, runStart });
       } catch (err) {
         onError?.({ scope: 'keyword', country, keyword, message: err.message });
       }
@@ -101,8 +134,8 @@ export async function harvest({ filters, onAd, onProgress, onError, shouldStop }
   return rawSeen.size;
 }
 
-async function harvestCountry({ ctx, filters, country, keyword, rawSeen, onAd: rawOnAd, onProgress, onError, shouldStop, runStart }) {
-  const page = await ctx.newPage();
+async function harvestCountry({ filters, country, keyword, rawSeen, onAd: rawOnAd, onProgress, onError, shouldStop, runStart }) {
+  const page = await newPage();
   const buffer = [];
   // Tag every record with the country + keyword it was harvested from.
   const onAd = (rec) => { rec.country = country; rec.keyword = keyword; rawOnAd?.(rec); };
