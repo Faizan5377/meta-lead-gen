@@ -1,5 +1,5 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { CheckCircle2, Database, LayoutDashboard, Loader2, Radar, RefreshCw } from 'lucide-react';
+import { CheckCircle2, Database, LayoutDashboard, Loader2, Plus, Radar, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import ClearDbButton from './components/ClearDbButton.jsx';
 import ExportButton from './components/ExportButton.jsx';
@@ -83,6 +83,16 @@ export default function App() {
     finally { setBusy(false); }
   }
   async function onStop() { if (state.runId) { try { await api.stopRun(state.runId); } catch {} } }
+  // Clear the finished run from the view and go back to the empty dashboard.
+  // (The run itself stays on the server until it restarts — this only resets
+  // what's shown, so a reload won't bring the old results back.)
+  function onNewSearch() {
+    unsubRef.current?.();
+    unsubRef.current = null;
+    try { localStorage.removeItem(LAST_RUN_KEY); } catch {}
+    dispatch({ type: '__reset__' });
+  }
+
   async function onRefresh() {
     if (!state.runId) return;
     setRefreshing(true);
@@ -162,6 +172,13 @@ export default function App() {
                     </span>
                     <ClearDbButton count={dbStats.businesses} disabled={running} onCleared={(s) => setDbStats(s)} />
                   </div>
+                )}
+                {state.runId && !running && (
+                  <button onClick={onNewSearch}
+                    title="Clear these results and start fresh"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-800">
+                    <Plus size={13} /> New search
+                  </button>
                 )}
                 {state.runId && (
                   <button onClick={onRefresh} disabled={refreshing}

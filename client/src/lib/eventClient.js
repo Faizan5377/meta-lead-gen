@@ -138,6 +138,10 @@ export function reducer(state, ev) {
     case '__snapshot__':
       return { ...fromSnapshot(state, ev.snapshot), ticker: 'Refreshed' };
 
+    // Back to the empty dashboard, ready for a new search.
+    case '__reset__':
+      return { ...initialState, businesses: [], index: {}, errors: [], notices: [] };
+
     default:
       return state;
   }
