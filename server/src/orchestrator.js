@@ -15,7 +15,7 @@ import { COUNTRIES } from './filters.js';
 import { store } from './store.js';
 import { scrapeFacebookContact } from './scraper/contactScraper.js';
 import { getContext, harvest } from './scraper/engine.js';
-import { scrapeOwnerInfo } from './scraper/googleEnrichment.js';
+import { scrapeOwnerInfo } from './scraper/ownerLookup.js';
 
 const countryName = (code) => COUNTRIES.find(c => c.code === code)?.name || code;
 
@@ -61,13 +61,17 @@ async function harvestPhase(run) {
     onProgress: (info) => {
       emit(run.id, {
         type: 'harvest_progress',
-        country: countryName(info.country), rawSeen: run.counts.rawSeen,
+        country: countryName(info.country), keyword: info.keyword,
+        rawSeen: run.counts.rawSeen,
         kept: run.counts.kept, skippedKnown: run.counts.skippedKnown, target: run.target,
       });
     },
     onError: (info) => {
-      run.errors.push({ scope: info.scope, message: info.message, ts: now() });
-      emit(run.id, { type: 'error', scope: info.scope, message: info.message, recoverable: true });
+      // "no results for this keyword" is normal, not a failure — surface it as
+      // an informational notice so one empty keyword doesn't look like a crash.
+      const kind = info.scope === 'no_results' ? 'notice' : 'error';
+      run.errors.push({ scope: info.scope, message: info.message, kind, ts: now() });
+      emit(run.id, { type: kind, scope: info.scope, message: info.message, recoverable: true });
     },
   }).catch((err) => {
     run.errors.push({ scope: 'harvest', message: err.message, ts: now() });
@@ -120,12 +124,14 @@ async function googlePhase(run) {
     emit(run.id, { type: 'google_progress', current: biz.page_name, done: run.counts.googleDone, total: targets.length });
     let patch;
     try {
-      patch = await scrapeOwnerInfo(page, biz.page_name, countryName(biz.country));
+      // Pass the website we scraped in the contacts phase — the company's own
+      // About/Team page is the most reliable owner source when search fails.
+      patch = await scrapeOwnerInfo(page, biz.page_name, countryName(biz.country), biz.contact_website);
     } catch (err) {
       patch = { google_status: 'failed' };
       logItemError(run, 'google', biz, err);
     }
-    delete patch.google_error;
+    delete patch.error;
     store.patchBusiness(run, biz.business_key, patch);
     db.updateBusiness(biz.business_key, patch);
     run.counts.googleDone++;

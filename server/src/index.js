@@ -74,7 +74,9 @@ app.get('/api/runs/:id/events', (req, reply) => {
 app.get('/api/runs/:id/export', async (req, reply) => {
   const run = store.get(req.params.id);
   if (!run) return reply.code(404).send({ error: 'run not found' });
-  if (!(run.status === 'finished' || run.status === 'stopped')) {
+  // Allow export once the run has ended for any reason (including 'error') so a
+  // partial failure never traps the data the user already collected.
+  if (run.status === 'running' || run.status === 'idle') {
     return reply.code(409).send({ error: 'run not finished yet' });
   }
   reply

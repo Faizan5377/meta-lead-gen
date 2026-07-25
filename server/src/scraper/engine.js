@@ -79,25 +79,33 @@ export async function harvest({ filters, onAd, onProgress, onError, shouldStop }
   const ctx = await getContext();
   const rawSeen = new Set();          // library_ids emitted this run
   const countries = (filters.countries?.length ? filters.countries : ['US']);
+  const keywords = (filters.keywords?.length ? filters.keywords : [filters.keyword]).filter(Boolean);
   const runStart = Date.now();
 
-  for (const country of countries) {
-    if (shouldStop?.()) break;
-    if (Date.now() - runStart > config.maxRunMs) break;
-    try {
-      await harvestCountry({ ctx, filters, country, rawSeen, onAd, onProgress, onError, shouldStop, runStart });
-    } catch (err) {
-      onError?.({ scope: 'country', country, message: err.message });
+  // Each keyword is searched separately (Meta has no OR syntax — a combined
+  // string would be treated as one literal phrase and match nothing) and every
+  // country is searched per keyword. Results merge into one deduped stream.
+  outer:
+  for (const keyword of keywords) {
+    for (const country of countries) {
+      if (shouldStop?.()) break outer;
+      if (Date.now() - runStart > config.maxRunMs) break outer;
+      onProgress?.({ country, keyword, rawSeen: rawSeen.size, phase: 'harvesting' });
+      try {
+        await harvestCountry({ ctx, filters, country, keyword, rawSeen, onAd, onProgress, onError, shouldStop, runStart });
+      } catch (err) {
+        onError?.({ scope: 'keyword', country, keyword, message: err.message });
+      }
     }
   }
   return rawSeen.size;
 }
 
-async function harvestCountry({ ctx, filters, country, rawSeen, onAd: rawOnAd, onProgress, onError, shouldStop, runStart }) {
+async function harvestCountry({ ctx, filters, country, keyword, rawSeen, onAd: rawOnAd, onProgress, onError, shouldStop, runStart }) {
   const page = await ctx.newPage();
   const buffer = [];
-  // Tag every record with the country it was harvested from.
-  const onAd = (rec) => { rec.country = country; rawOnAd?.(rec); };
+  // Tag every record with the country + keyword it was harvested from.
+  const onAd = (rec) => { rec.country = country; rec.keyword = keyword; rawOnAd?.(rec); };
 
   const listener = async (res) => {
     try {
@@ -111,7 +119,7 @@ async function harvestCountry({ ctx, filters, country, rawSeen, onAd: rawOnAd, o
   page.on('response', listener);
 
   try {
-    const url = buildSearchUrl(filters, country);
+    const url = buildSearchUrl(filters, country, keyword);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // The Ad Library streams results from its GraphQL feed a few seconds after
@@ -125,12 +133,13 @@ async function harvestCountry({ ctx, filters, country, rawSeen, onAd: rawOnAd, o
       await jitter(1400, 2200);
     }
     if (!buffer.length) {
-      onError?.({ scope: 'country', country, message: `No ads returned for "${filters.keyword}" in ${country}.` });
+      // Not an error — just a keyword with no matching ads in this country.
+      onError?.({ scope: 'no_results', country, keyword, message: `No ads for "${keyword}" in ${country}.` });
       return;
     }
 
     let stableScrolls = 0;
-    onProgress?.({ country, rawSeen: rawSeen.size, phase: 'harvesting' });
+    onProgress?.({ country, keyword, rawSeen: rawSeen.size, phase: 'harvesting' });
 
     while (!shouldStop?.()
         && stableScrolls < config.stableScrollsToStop
@@ -143,7 +152,7 @@ async function harvestCountry({ ctx, filters, country, rawSeen, onAd: rawOnAd, o
         added = drain(buffer, rawSeen, onAd);
       }
       stableScrolls = added === 0 ? stableScrolls + 1 : 0;
-      onProgress?.({ country, rawSeen: rawSeen.size, phase: 'harvesting' });
+      onProgress?.({ country, keyword, rawSeen: rawSeen.size, phase: 'harvesting' });
 
       await humanScroll(page, 1600);
       await jitter(config.scrollSettleMs, config.scrollSettleMs + 900);

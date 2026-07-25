@@ -50,6 +50,7 @@ export default function MultiSelect({ options, value, onChange, placeholder = 'S
           {searchable && (
             <div className="border-b border-slate-100 p-2">
               <input
+                type="text" aria-label="Filter options"
                 autoFocus value={q} onChange={(e) => setQ(e.target.value)}
                 placeholder="Search…"
                 className="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:border-brand-500 focus:outline-none"

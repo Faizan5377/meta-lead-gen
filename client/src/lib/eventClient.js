@@ -15,6 +15,8 @@ export const initialState = {
   businesses: [],
   index: {},             // business_key -> array index
   errors: [],
+  notices: [],           // e.g. "no ads for keyword X" — informational
+  currentKeyword: null,
   ticker: null,
   dbStats: null,
   exportReady: false,
@@ -31,6 +33,8 @@ function fromSnapshot(state, snap) {
   const businesses = Array.isArray(snap.businesses) ? snap.businesses : state.businesses;
   return {
     ...state,
+    // Without this the Export/Refresh buttons have no run to act on.
+    runId: snap.id ?? state.runId,
     status: snap.status ?? state.status,
     phase: snap.phase ?? state.phase,
     filters: snap.filters ?? state.filters,
@@ -60,8 +64,9 @@ export function reducer(state, ev) {
     case 'harvest_progress':
       return {
         ...state,
+        currentKeyword: ev.keyword ?? state.currentKeyword,
         counts: { ...state.counts, rawSeen: ev.rawSeen, kept: ev.kept, skippedKnown: ev.skippedKnown ?? state.counts.skippedKnown },
-        ticker: `Harvesting${ev.country ? ` · ${ev.country}` : ''} — ${ev.kept} kept, ${ev.skippedKnown || 0} skipped`,
+        ticker: `Harvesting${ev.keyword ? ` “${ev.keyword}”` : ''}${ev.country ? ` · ${ev.country}` : ''} — ${ev.kept} kept, ${ev.skippedKnown || 0} skipped`,
       };
 
     case 'business_added': {
@@ -115,6 +120,10 @@ export function reducer(state, ev) {
     case 'error':
       return { ...state, errors: state.errors.concat([{ scope: ev.scope, message: ev.message, ts: ev.ts }]).slice(-200) };
 
+    // A keyword with no matching ads — informational, not a failure.
+    case 'notice':
+      return { ...state, notices: (state.notices || []).concat([{ scope: ev.scope, message: ev.message, ts: ev.ts }]).slice(-100) };
+
     case 'run_finished':
       return {
         ...fromSnapshot(state, ev.snapshot),
@@ -144,7 +153,7 @@ export function subscribeToRun(runId, onEvent) {
   const types = [
     'run_started', 'phase_started', 'phase_done', 'harvest_progress',
     'business_added', 'business_updated', 'business_enriched', 'business_owner',
-    'contact_progress', 'google_progress', 'error', 'run_finished',
+    'contact_progress', 'google_progress', 'error', 'notice', 'run_finished',
   ];
   for (const t of types) es.addEventListener(t, handler);
   es.onerror = () => {/* EventSource auto-retries */};

@@ -39,23 +39,31 @@ class RunStore {
     const key = businessKey(rec);
     if (!key) return { status: 'skipped' };
 
-    // Already captured in a previous run (any of its ads) → don't surface again.
-    if (db.hasBusiness(key) || db.hasSeenAd(rec.library_id)) {
+    // Check THIS run first: the same business often resurfaces under another
+    // keyword or country, and we want to record that extra keyword. (The DB
+    // check below would otherwise swallow it, because businesses added during
+    // this run are already persisted.)
+    const existing = run.businessByPage.get(key);
+
+    // Captured in a PREVIOUS run → don't surface again.
+    if (!existing && (db.hasBusiness(key) || db.hasSeenAd(rec.library_id))) {
       run.counts.skippedKnown++;
       return { status: 'skipped' };
     }
 
-    const existing = run.businessByPage.get(key);
     if (existing) {
+      // Same business surfaced again (another ad, or another keyword/country).
+      // Record the extra keyword, and swap in the better ad if this one has
+      // been running longer.
+      const grew = addKeyword(existing, rec.keyword);
       if (isLongerRunning(rec, existing)) {
-        // Replace the kept creative but preserve any enrichment already done.
         mergeKeptAd(existing, rec);
         return { status: 'updated', business: existing };
       }
-      return { status: 'skipped' };
+      return grew ? { status: 'updated', business: existing } : { status: 'skipped' };
     }
 
-    const business = { ...rec, business_key: key };
+    const business = { ...rec, business_key: key, keywords: rec.keyword ? [rec.keyword] : [] };
     run.businesses.push(business);
     run.businessByPage.set(key, business);
     run.counts.kept = run.businesses.length;
@@ -83,7 +91,7 @@ class RunStore {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
       stoppedAt: run.stoppedAt,
-      exportReady: run.status === 'finished' || run.status === 'stopped',
+      exportReady: run.status === 'finished' || run.status === 'stopped' || run.status === 'error',
     };
   }
 }
@@ -125,14 +133,25 @@ function isLongerRunning(cand, cur) {
   return ce > ue;
 }
 
+// Track every keyword that surfaced this business. Returns true if new.
+function addKeyword(business, keyword) {
+  if (!keyword) return false;
+  if (!Array.isArray(business.keywords)) business.keywords = business.keyword ? [business.keyword] : [];
+  if (business.keywords.some((k) => k.toLowerCase() === keyword.toLowerCase())) return false;
+  business.keywords.push(keyword);
+  return true;
+}
+
 function mergeKeptAd(existing, rec) {
-  // Copy ad/creative fields from the better ad; keep enrichment fields intact.
+  // Copy ad/creative fields from the better ad; keep enrichment fields and the
+  // accumulated keyword list intact.
   const keep = {
     contact_email: existing.contact_email, contact_phone: existing.contact_phone,
     contact_website: existing.contact_website, contact_status: existing.contact_status,
     owner_name: existing.owner_name, owner_title: existing.owner_title,
-    owner_details: existing.owner_details, google_status: existing.google_status,
-    business_key: existing.business_key,
+    owner_source: existing.owner_source, google_status: existing.google_status,
+    business_key: existing.business_key, keywords: existing.keywords,
+    keyword: existing.keyword || rec.keyword,
   };
   Object.assign(existing, rec, keep);
 }

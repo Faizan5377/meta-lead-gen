@@ -129,7 +129,7 @@ export const SORTS = [
 // Short help text per filter (shown in the UI's "i" tooltips). Mirrors what each
 // Meta Ad Library filter actually does.
 export const FILTER_HELP = {
-  keyword: 'Words that appear in the ad text or the advertiser name. Meta matches ads containing your keyword.',
+  keyword: 'Words that appear in the ad text or the advertiser name. Add as many keywords as you like — each one is searched separately and the results are merged and de-duplicated.',
   matchType: 'Broad matches your words in any order; Exact phrase matches the words together, in order.',
   countries: 'The country/countries where the ads were shown. Choose one or several, or “All countries”.',
   adType: 'Meta’s ad category. “All ads” covers everything. Properties, Employment and Financial products are special transparency categories that only exist in the US and Canada.',
@@ -163,8 +163,17 @@ export const FILTER_META = {
 export function normalizeFilters(body = {}) {
   const errors = [];
 
-  const keyword = String(body.keyword || '').trim();
-  if (!keyword) errors.push('keyword is required');
+  // Accept `keywords: []` (preferred) or a single `keyword` string. Commas,
+  // semicolons and newlines split into separate keywords, so pasting a list
+  // works and a comma-separated string never becomes one dead literal query.
+  const raw = Array.isArray(body.keywords) ? body.keywords : [body.keywords ?? body.keyword];
+  const keywords = raw
+    .flatMap((k) => String(k ?? '').split(/[,;\n]/))
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .filter((v, i, a) => a.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i)
+    .slice(0, 50);
+  if (!keywords.length) errors.push('At least one keyword is required');
 
   let countries = Array.isArray(body.countries) ? body.countries : (body.country ? [body.country] : []);
   countries = countries.map(c => String(c).toUpperCase()).filter(c => COUNTRY_CODES.has(c));
@@ -195,7 +204,9 @@ export function normalizeFilters(body = {}) {
 
   return {
     filters: {
-      keyword, countries, adType, activeStatus, mediaType,
+      keywords,
+      keyword: keywords[0] || '', // convenience/display for single-keyword runs
+      countries, adType, activeStatus, mediaType,
       platforms, languages, matchType, sort, startDateMin, startDateMax, target,
     },
     errors,

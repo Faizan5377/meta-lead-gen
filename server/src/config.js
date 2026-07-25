@@ -26,8 +26,10 @@ export const config = {
   // businesses OR genuinely runs out of ads while scrolling.
   targetAds: num(process.env.TARGET_ADS, 5000),
 
-  // Safety ceiling so a stuck run eventually ends (very generous for 5000 ads).
-  maxRunMs: num(process.env.MAX_RUN_MS, 45 * 60 * 1000),
+  // Safety ceiling for the WHOLE harvest (all keywords × countries), so a stuck
+  // run eventually ends. Generous, because a multi-keyword sweep to 5,000 ads
+  // legitimately takes a while.
+  maxRunMs: num(process.env.MAX_RUN_MS, 90 * 60 * 1000),
   scrollSettleMs: num(process.env.SCROLL_SETTLE_MS, 2200),
   // How many consecutive scroll cycles with zero new ads before we conclude the
   // feed is exhausted. Kept high because Meta back-fills lazily.

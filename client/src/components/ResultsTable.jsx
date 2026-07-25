@@ -34,6 +34,7 @@ const COLS = [
   { key: 'page_name', label: 'Business', sortable: true },
   { key: 'followers', label: 'Followers', sortable: true, align: 'right' },
   { key: 'page_categories', label: 'Category' },
+  { key: 'keyword', label: 'Keyword', sortable: true },
   { key: 'country', label: 'Country' },
   { key: 'is_active', label: 'Status' },
   { key: 'days_running', label: 'Days', sortable: true, align: 'right' },
@@ -55,7 +56,7 @@ export default function ResultsTable({ businesses }) {
     let arr = businesses;
     if (s) {
       arr = arr.filter(b =>
-        `${b.page_name || ''} ${b.owner_name || ''} ${(b.page_categories || []).join(' ')} ${b.contact_email || ''} ${b.display_domain || ''} ${b.country || ''}`
+        `${b.page_name || ''} ${b.owner_name || ''} ${(b.page_categories || []).join(' ')} ${b.contact_email || ''} ${b.display_domain || ''} ${b.country || ''} ${(b.keywords || [b.keyword]).join(' ')}`
           .toLowerCase().includes(s));
     }
     arr = arr.slice().sort((a, b) => {
@@ -111,6 +112,17 @@ export default function ResultsTable({ businesses }) {
                 </td>
                 <td className="max-w-[140px] px-3 py-2.5">
                   <span className="truncate text-slate-600" title={(b.page_categories || []).join(', ')}>{(b.page_categories || [])[0] || <span className="text-slate-300">—</span>}</span>
+                </td>
+                <td className="max-w-[130px] px-3 py-2.5">
+                  {b.keyword ? (
+                    <span
+                      className="inline-block max-w-full truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
+                      title={(b.keywords || [b.keyword]).join(', ')}
+                    >
+                      {b.keyword}
+                      {b.keywords?.length > 1 && <span className="text-slate-400"> +{b.keywords.length - 1}</span>}
+                    </span>
+                  ) : <span className="text-slate-300">—</span>}
                 </td>
                 <td className="px-3 py-2.5 text-slate-600">{b.country || '—'}</td>
                 <td className="px-3 py-2.5"><ActiveBadge active={b.is_active} /></td>

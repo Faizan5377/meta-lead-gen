@@ -13,13 +13,13 @@ The moment you press **Start**, four phases run automatically, in sequence:
 1. **Harvest** — drives a headless Chromium over the Ad Library and intercepts Meta's internal GraphQL feed (far more robust than scraping the visible page). It captures **one unique ad per business** — the *longest continuously running* one — up to your target (default **5,000**). It keeps scrolling until the target is reached or the feed genuinely runs out of ads. It never opens a browser window.
 2. **De-dupe across searches** — every business is stored in a local SQLite database. On future searches, ads/businesses you already captured are **skipped automatically**, so you only ever see new results.
 3. **Facebook contacts** — visits each business's Facebook page and scrapes email, phone, and website.
-4. **Owner lookup** — best-effort web search (Google, with a Bing fallback) for the owner / founder / CEO.
+4. **Owner lookup** — best-effort search for the owner / founder / CEO. It queries the search engines that survive a headless browser (Brave first, then Ecosia and Startpage — Google and Bing block automation outright), and if those come up empty it reads the company's own About / Team page using the website found in step 3.
 
-Every phase is wrapped so a failure is logged and streamed but **never crashes the run**. The **Export** button stays disabled until all four phases finish.
+Every phase is wrapped so a failure is logged and streamed but **never crashes the run**. The **Export** button stays disabled until all four phases finish, then downloads a single CSV — UTF-8 with a BOM, CRLF line endings and human-readable headers, with every field sanitised to one line so a business is always exactly one row in Excel, Sheets or pandas.
 
 ### What you get per business
 
-Followers · advertiser category · country · active status · ad start date & days running · CTA · media format · ad copy · destination link · Facebook page link · ad-snapshot link · email · phone · website · owner name & title · library id · numeric page id.
+Followers · advertiser category · country · matched keyword(s) · active status · ad start date & days running · CTA · media format · ad copy · destination link · Facebook page link · ad-snapshot link · email · phone · website · owner name, title & source · library id · numeric page id.
 
 ---
 
@@ -27,7 +27,8 @@ Followers · advertiser category · country · active status · ad start date & 
 
 The filter bar reproduces the Ad Library's own filters and their dynamic behavior:
 
-- **Keyword** + **match type** — broad (any order) or exact phrase
+- **Keywords** — add as many as you like. Each keyword is searched **separately** and the results are merged and de-duplicated, because Meta has no OR syntax (typing `dentist, plumber, spa` as one query matches nothing). Press Enter, comma or semicolon to add a chip, or paste a whole list at once.
+- **Match type** — broad (any order) or exact phrase
 - **Countries** — multi-select, or *All countries* (alphabetically ordered)
 - **Ad category** — All ads · Issues/elections/politics · Properties · Employment · Financial products. The last three are legally-restricted transparency categories that only exist in the **US & Canada**, so they are automatically greyed out for other countries — exactly as Meta does.
 - **Active status** · **Media type** · **Platforms** · **Languages** · **Ad-delivery date range**
@@ -76,16 +77,17 @@ Open **http://localhost:5173**. The scraper runs **headless** — no browser win
 
 ## How to use it
 
-1. **Enter a keyword** (e.g. `real estate`, `dentist`, `fitness coaching`) and **pick one or more countries**. These two fields are all you need to start.
+1. **Add one or more keywords** (e.g. `real estate`, `dentist`, `fitness coaching`) and **pick one or more countries**. These two fields are all you need to start. Type a keyword and press **Enter** (or comma / semicolon) to turn it into a chip — add as many as you want, or paste a comma-separated list to add them all at once. Every keyword is searched separately against every country, and the results are merged into one de-duplicated list.
 2. **(Optional) refine with filters** — click **Filters** to expand ad category, active status, media type, platforms, languages, and a start-date range. Hover any **ⓘ** to see what a filter does.
-3. **Set a target** — the number of unique businesses to collect (default 5,000). The harvester stops early only if the Ad Library genuinely runs out of matching ads.
+3. **Set a target** — the total number of unique businesses to collect across all your keywords (default 5,000). The harvester stops early only if the Ad Library genuinely runs out of matching ads.
 4. **Press “Start scraping.”** The dashboard comes alive:
    - **Metric cards** at the top count businesses, followers, owners found, and email/phone/website — with rolling animated numbers that stay exactly in sync with the table.
    - A **Harvest → Contacts → Owners → Done** stepper shows live progress bars for each phase.
    - **Rows stream into the table** as businesses are found, then fill in with contacts and owners as enrichment completes.
    - The **Run status** panel in the sidebar shows the current phase and how many businesses were kept vs. skipped (already in your database).
+   - The live ticker names the keyword being searched. If a keyword has no matching ads, it's reported as a quiet amber notice ("N keywords with no ads") rather than an error — the run simply moves on to the next one.
 5. **Stop any time** with the red **Stop** button — whatever has been collected is kept.
-6. **Export** — when every phase finishes, the green **Export CSV** button activates. One click downloads every business from the run, with all its data, as a single UTF-8 CSV.
+6. **Export** — when every phase finishes, the green **Export CSV** button activates. One click downloads every business from the run, with all its data, as a single UTF-8 CSV. Reloading the page mid-run is safe: the last run is restored automatically, so you never lose access to the export.
 7. **Start fresh whenever you like** — the **trash icon** next to the “N in DB” badge clears the local database (with a confirmation) so previously-found businesses are no longer skipped.
 
 > **Tip:** because businesses are deduplicated against the database, you can run the same keyword repeatedly over time and only ever get *new* advertisers each run.
@@ -99,7 +101,7 @@ Open **http://localhost:5173**. The scraper runs **headless** — no browser win
 | `PORT` | `8787` | Backend port |
 | `HEADFUL` | `false` | Set `true` to watch the browser (debugging only) |
 | `TARGET_ADS` | `5000` | Default harvest target (the UI overrides this per search) |
-| `MAX_RUN_MS` | `2700000` | Safety ceiling for a whole harvest (45 min) |
+| `MAX_RUN_MS` | `5400000` | Safety ceiling for a whole harvest, all keywords (90 min) |
 | `STABLE_SCROLLS_TO_STOP` | `5` | Stop after N scrolls that surface no new ads |
 | `SCROLL_SETTLE_MS` | `2200` | Pause after each scroll so the next feed page loads |
 | `ENRICH_CONCURRENCY` | `3` | Parallel pages for contact / owner enrichment |

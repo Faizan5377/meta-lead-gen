@@ -16,9 +16,9 @@ const BUSINESS_COLUMNS = [
   'is_active', 'start_date', 'end_date', 'days_running', 'collation_count',
   'cta_text', 'cta_type', 'title', 'body_text', 'link_url', 'display_domain',
   'display_format', 'image_url', 'video_url',
-  'keyword', 'country',
+  'keyword', 'keywords', 'country',
   'contact_email', 'contact_phone', 'contact_website', 'contact_status',
-  'owner_name', 'owner_title', 'owner_details', 'google_status',
+  'owner_name', 'owner_title', 'owner_source', 'google_status',
   'run_id', 'first_seen_at', 'last_updated_at',
 ];
 
@@ -52,6 +52,7 @@ class Database {
         CREATE INDEX IF NOT EXISTS idx_seen_page ON seen_ads(page_id);
       `);
       this.ok = true;
+      this.#migrate();
       // Warm the in-memory mirrors for fast dedup during a harvest.
       for (const r of this.db.prepare('SELECT library_id, page_id FROM seen_ads').all()) {
         if (r.library_id) this.memSeenAds.add(String(r.library_id));
@@ -64,6 +65,24 @@ class Database {
     } catch (err) {
       this.ok = false;
       console.warn(`[db] node:sqlite unavailable — running without persistence. (${err.message})`);
+    }
+  }
+
+  // Add any columns introduced after a user's database was first created, so
+  // upgrading the app never breaks an existing leads.db.
+  #migrate() {
+    try {
+      const existing = new Set(
+        this.db.prepare('PRAGMA table_info(businesses)').all().map((r) => r.name)
+      );
+      for (const col of BUSINESS_COLUMNS) {
+        if (!existing.has(col)) {
+          this.db.exec(`ALTER TABLE businesses ADD COLUMN ${col} TEXT`);
+          console.log(`[db] migrated: added businesses.${col}`);
+        }
+      }
+    } catch (err) {
+      console.warn('[db] migration check failed:', err.message);
     }
   }
 

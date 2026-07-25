@@ -11,10 +11,12 @@ import { api } from './lib/api.js';
 import { initialState, reducer, subscribeToRun } from './lib/eventClient.js';
 
 const DEFAULT_FILTERS = {
-  keyword: '', matchType: 'keyword_unordered', countries: ['US'], adType: 'all',
+  keywords: [], matchType: 'keyword_unordered', countries: ['US'], adType: 'all',
   activeStatus: 'active', mediaType: 'all', platforms: [], languages: [],
   startDateMin: '', startDateMax: '', target: 5000,
 };
+
+const LAST_RUN_KEY = 'adharvester:lastRunId';
 
 const PHASE_LABEL = { idle: 'Idle', harvesting: 'Harvesting ads', contacts: 'Fetching contacts', google: 'Finding owners', done: 'Complete' };
 
@@ -37,6 +39,29 @@ export default function App() {
         setFilters((f) => ({ ...f, target: m.defaultTarget || 5000 }));
         setDbStats(stats);
       } catch (err) { setBootError(err.message); }
+
+      // Restore the last run after a page reload so results (and the export
+      // button) aren't lost. Reconnects live if it's still running.
+      const lastId = (() => { try { return localStorage.getItem(LAST_RUN_KEY); } catch { return null; } })();
+      if (lastId) {
+        try {
+          const snap = await api.getRun(lastId);
+          dispatch({ type: '__snapshot__', snapshot: snap });
+          if (snap.filters?.keywords?.length) setFilters((f) => ({ ...f, ...snap.filters }));
+          if (snap.status === 'running') {
+            unsubRef.current?.();
+            unsubRef.current = subscribeToRun(lastId, dispatch);
+          }
+        } catch (err) {
+          // Only forget the run if the server says it's genuinely gone —
+          // a transient network blip shouldn't discard the user's results.
+          if (/^404/.test(err.message)) {
+            try { localStorage.removeItem(LAST_RUN_KEY); } catch {}
+          } else {
+            console.warn('Could not restore last run:', err.message);
+          }
+        }
+      }
     })();
     return () => unsubRef.current?.();
   }, []);
@@ -47,6 +72,10 @@ export default function App() {
     setBusy(true);
     try {
       const res = await api.createRun(filters);
+      try { localStorage.setItem(LAST_RUN_KEY, res.runId); } catch {}
+      // Seed state from the created run so runId (and therefore Export/Refresh)
+      // is available even if an SSE event is missed.
+      dispatch({ type: '__snapshot__', snapshot: res.snapshot });
       unsubRef.current?.();
       unsubRef.current = subscribeToRun(res.runId, dispatch);
       await api.startRun(res.runId);

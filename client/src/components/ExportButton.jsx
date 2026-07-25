@@ -11,9 +11,12 @@ export default function ExportButton({ runId, ready }) {
     const a = document.createElement('a');
     a.href = api.exportUrl(runId);
     a.setAttribute('download', '');
+    a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
-    a.remove();
+    // Keep the anchor around for a moment — removing it synchronously can
+    // cancel the download before the browser has started it.
+    setTimeout(() => a.remove(), 2000);
   };
   return (
     <button

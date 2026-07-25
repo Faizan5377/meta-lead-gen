@@ -74,6 +74,14 @@ export default function ProgressPanel({ state }) {
       {/* Ticker + errors */}
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
         <div className="truncate text-xs text-slate-500">{state.ticker || '—'}</div>
+        {state.notices?.length > 0 && (
+          <span
+            title={state.notices.slice(-6).map((n) => n.message).join('\n')}
+            className="shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700"
+          >
+            {state.notices.length} keyword{state.notices.length === 1 ? '' : 's'} with no ads
+          </span>
+        )}
         {state.errors.length > 0 && (
           <button onClick={() => setShowErrors(v => !v)} className="shrink-0 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100">
             {state.errors.length} warning{state.errors.length === 1 ? '' : 's'} {showErrors ? '▾' : '▸'}

@@ -1,6 +1,7 @@
-import { ChevronDown, Play, Search, SlidersHorizontal, Square } from 'lucide-react';
+import { ChevronDown, Play, SlidersHorizontal, Square } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import InfoTip from './InfoTip.jsx';
+import KeywordInput from './KeywordInput.jsx';
 import MultiSelect from './MultiSelect.jsx';
 import Select from './Select.jsx';
 
@@ -45,7 +46,7 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
     (filters.languages?.length ? 1 : 0) +
     (filters.startDateMin || filters.startDateMax ? 1 : 0);
 
-  const ready = filters.keyword?.trim() && filters.countries?.length > 0;
+  const ready = filters.keywords?.length > 0 && filters.countries?.length > 0;
 
   // Compact running banner.
   if (running) {
@@ -60,7 +61,11 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
             Running
           </span>
           <span className="text-slate-300">·</span>
-          <span className="font-medium text-slate-800">“{filters.keyword}”</span>
+          <span className="font-medium text-slate-800">
+            {filters.keywords?.length > 1
+              ? `${filters.keywords.length} keywords`
+              : `“${filters.keywords?.[0] || ''}”`}
+          </span>
           <span className="text-slate-300">·</span>
           <span>{(filters.countries || []).join(', ')}</span>
           <span className="text-slate-300">·</span>
@@ -95,17 +100,8 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
           />
         </div>
         <div className="md:col-span-4">
-          <Label help={help.keyword}>Keyword</Label>
-          <div className="relative">
-            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              value={filters.keyword}
-              onChange={(e) => set({ keyword: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter' && ready && !busy) onStart(); }}
-              placeholder="real estate, dentist, fitness coaching…"
-              className={`${inputCls} pl-9`}
-            />
-          </div>
+          <Label help={help.keyword}>Keywords</Label>
+          <KeywordInput value={filters.keywords} onChange={(v) => set({ keywords: v })} />
         </div>
         <div className="md:col-span-2">
           <Label help={help.target}>Target</Label>
@@ -174,7 +170,9 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
 
       <div className="mt-5 flex items-center justify-between">
         <div className="text-xs text-slate-400">
-          {ready ? `Ready · up to ${filters.target.toLocaleString()} unique businesses` : 'Enter a keyword and pick at least one country.'}
+          {ready
+            ? `Ready · ${filters.keywords.length} keyword${filters.keywords.length === 1 ? '' : 's'} × ${filters.countries.length} ${filters.countries.length === 1 ? 'country' : 'countries'} · up to ${filters.target.toLocaleString()} unique businesses`
+            : 'Add at least one keyword and pick at least one country.'}
         </div>
         <button
           onClick={onStart}

@@ -2,14 +2,14 @@
 // per URL — the engine iterates multiple selected countries and merges results,
 // which avoids guessing Meta's undocumented multi-country array syntax.
 
-export function buildSearchUrl(filters, country) {
+export function buildSearchUrl(filters, country, keyword) {
   const params = new URLSearchParams({
     active_status: filters.activeStatus || 'active',
     ad_type: filters.adType || 'all',
     country: country || filters.countries?.[0] || 'US',
     is_targeted_country: 'false',
     media_type: filters.mediaType || 'all',
-    q: filters.keyword || '',
+    q: keyword || filters.keywords?.[0] || filters.keyword || '',
     search_type: filters.matchType || 'keyword_unordered',
   });
 

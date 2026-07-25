@@ -90,7 +90,7 @@ function normalizeFeedAd(r, groupSize) {
 
     // Enrichment slots (filled by later phases).
     contact_email: null, contact_phone: null, contact_website: null, contact_status: 'idle',
-    owner_name: null, owner_title: null, owner_details: null, google_status: 'idle',
+    owner_name: null, owner_title: null, owner_source: null, google_status: 'idle',
   };
 }
 
