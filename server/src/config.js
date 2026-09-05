@@ -36,11 +36,30 @@ export const config = {
   stableScrollsToStop: num(process.env.STABLE_SCROLLS_TO_STOP, 5),
   noNewAdsGraceMs: num(process.env.NO_NEW_ADS_GRACE_MS, 7000),
 
-  // Parallel pages for the enrichment phases (FB contacts, Google owner lookup).
+  // Parallel pages for the enrichment phases (FB contacts, owner lookup).
   enrichConcurrency: num(process.env.ENRICH_CONCURRENCY, 3),
 
-  // The automatic Google owner-enrichment phase. On by default; can be disabled.
-  googleEnrichEnabled: bool(process.env.GOOGLE_ENRICH, true),
+  // The automatic owner-enrichment phase. On by default; can be disabled.
+  // GOOGLE_ENRICH is the legacy name for this flag and is still honoured.
+  ownerEnrichEnabled: bool(process.env.OWNER_ENRICH ?? process.env.GOOGLE_ENRICH, true),
+
+  // Search-engine owner fallback, used when Hunter has no answer.
+  ownerSearchEnabled: bool(process.env.OWNER_SEARCH_ENABLED, true),
+
+  // Hunter.io — the primary owner/decision-maker source.
+  //
+  // Credits are metered per month and a harvest can surface thousands of
+  // businesses, so paid calls are budgeted twice over: `maxCreditsPerRun` caps
+  // one run, and `minCreditsReserve` stops us from draining the account to zero
+  // (leaving headroom for other tooling on the same key). Both are enforced in
+  // enrich/hunter.js on top of the free email-count gate.
+  hunter: {
+    apiKey: process.env.HUNTER_API_KEY || '',
+    enabled: bool(process.env.HUNTER_ENABLED, true),
+    maxCreditsPerRun: num(process.env.HUNTER_MAX_CREDITS_PER_RUN, 100),
+    minCreditsReserve: num(process.env.HUNTER_MIN_CREDITS_RESERVE, 10),
+    cacheDays: num(process.env.HUNTER_CACHE_DAYS, 30),
+  },
 
   dbPath: process.env.DB_PATH || path.resolve(__dirname, '../data/leads.db'),
 

@@ -14,12 +14,13 @@ class RunStore {
       id,
       createdAt: new Date().toISOString(),
       status: 'idle',            // idle | running | finished | stopped | error
-      phase: 'idle',             // idle | harvesting | contacts | google | done
+      phase: 'idle',             // idle | harvesting | contacts | owners | done
       filters,
       target: filters.target,
       businesses: [],            // kept businesses (this run), insertion order
       businessByPage: new Map(), // dedup key -> business
-      counts: { rawSeen: 0, kept: 0, contactsDone: 0, googleDone: 0, skippedKnown: 0 },
+      counts: { rawSeen: 0, kept: 0, contactsDone: 0, ownersDone: 0, skippedKnown: 0 },
+      hunter: null,              // live Hunter credit state, for the UI
       cancelRequested: false,
       startedAt: null,
       finishedAt: null,
@@ -86,6 +87,7 @@ class RunStore {
       filters: run.filters,
       target: run.target,
       counts: run.counts,
+      hunter: run.hunter,
       businesses: run.businesses,
       errors: run.errors.slice(-100),
       startedAt: run.startedAt,
@@ -148,8 +150,13 @@ function mergeKeptAd(existing, rec) {
   const keep = {
     contact_email: existing.contact_email, contact_phone: existing.contact_phone,
     contact_website: existing.contact_website, contact_status: existing.contact_status,
+    email_source: existing.email_source,
     owner_name: existing.owner_name, owner_title: existing.owner_title,
-    owner_source: existing.owner_source, google_status: existing.google_status,
+    owner_email: existing.owner_email, owner_linkedin: existing.owner_linkedin,
+    owner_phone: existing.owner_phone, owner_confidence: existing.owner_confidence,
+    owner_source: existing.owner_source, owner_status: existing.owner_status,
+    company_domain: existing.company_domain,
+    company_domain_source: existing.company_domain_source,
     business_key: existing.business_key, keywords: existing.keywords,
     keyword: existing.keyword || rec.keyword,
   };

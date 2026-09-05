@@ -12,8 +12,10 @@
 import { adSnapshotUrl } from './urlBuilder.js';
 
 const COLUMNS = [
-  'page_name', 'owner_name', 'owner_title', 'owner_source', 'google_status',
+  'page_name', 'owner_name', 'owner_title', 'owner_email', 'owner_phone',
+  'owner_linkedin', 'owner_confidence', 'owner_source', 'owner_status',
   'contact_email', 'contact_phone', 'contact_website', 'contact_status',
+  'company_domain',
   'followers', 'page_categories', 'country', 'keyword', 'keywords_matched',
   'library_id', 'page_id', 'page_url', 'ad_snapshot_url',
   'is_active', 'start_date', 'end_date', 'days_running', 'collation_count',
@@ -24,9 +26,11 @@ const COLUMNS = [
 // Human-friendly headers for the first row.
 const HEADERS = {
   page_name: 'Business', owner_name: 'Owner', owner_title: 'Owner Title',
-  owner_source: 'Owner Source', google_status: 'Owner Lookup',
+  owner_email: 'Owner Email', owner_phone: 'Owner Phone',
+  owner_linkedin: 'Owner LinkedIn', owner_confidence: 'Owner Confidence',
+  owner_source: 'Owner Source', owner_status: 'Owner Lookup',
   contact_email: 'Email', contact_phone: 'Phone', contact_website: 'Website',
-  contact_status: 'Contact Lookup', followers: 'Followers',
+  contact_status: 'Contact Lookup', company_domain: 'Company Domain', followers: 'Followers',
   page_categories: 'Categories', country: 'Country', keyword: 'Keyword',
   keywords_matched: 'All Keywords', library_id: 'Ad Library ID', page_id: 'Page ID',
   page_url: 'Facebook Page', ad_snapshot_url: 'Ad Link', is_active: 'Active',

@@ -1,4 +1,4 @@
-import { ArrowUpRight, Building2, Database, Globe, Mail, Phone, UserRound, Users } from 'lucide-react';
+import { ArrowUpRight, AtSign, Building2, Database, Globe, Mail, Phone, UserRound, Users } from 'lucide-react';
 import AnimatedNumber from './AnimatedNumber.jsx';
 
 // Featured "hero" tile — deep-green gradient, like the reference's highlighted card.
@@ -38,10 +38,11 @@ function Tile({ label, value, icon: Icon, tint }) {
 
 export default function MetricsBar({ metrics }) {
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
       <HeroTile label="Businesses" value={metrics.businesses} icon={Building2} />
       <Tile label="With followers" value={metrics.followers} icon={Users} tint="bg-brand-50 text-brand-600" />
       <Tile label="Owner found" value={metrics.owner} icon={UserRound} tint="bg-brand-50 text-brand-600" />
+      <Tile label="Owner email" value={metrics.ownerEmail} icon={AtSign} tint="bg-brand-50 text-brand-600" />
       <Tile label="Email" value={metrics.email} icon={Mail} tint="bg-emerald-50 text-emerald-600" />
       <Tile label="Phone" value={metrics.phone} icon={Phone} tint="bg-emerald-50 text-emerald-600" />
       <Tile label="Website" value={metrics.website} icon={Globe} tint="bg-emerald-50 text-emerald-600" />

@@ -4,10 +4,10 @@ import AnimatedNumber from './AnimatedNumber.jsx';
 const STEPS = [
   { key: 'harvesting', label: 'Harvest' },
   { key: 'contacts', label: 'Contacts' },
-  { key: 'google', label: 'Owners' },
+  { key: 'owners', label: 'Owners' },
   { key: 'done', label: 'Done' },
 ];
-const ORDER = { idle: -1, harvesting: 0, contacts: 1, google: 2, done: 3 };
+const ORDER = { idle: -1, harvesting: 0, contacts: 1, owners: 2, done: 3 };
 
 function Bar({ done, total, tone = 'brand' }) {
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
@@ -16,6 +16,54 @@ function Bar({ done, total, tone = 'brand' }) {
     <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
       <div className={`h-full ${bg} transition-all duration-500`} style={{ width: `${pct}%` }} />
     </div>
+  );
+}
+
+// Live Hunter credit state. Credits are metered monthly, so the run makes this
+// visible rather than silently degrading to scrape-only lookups.
+function HunterChip({ hunter }) {
+  if (!hunter) return null;
+  if (!hunter.enabled) {
+    const restricted = hunter.disabledReason === 'restricted_account';
+    const badKey = hunter.disabledReason === 'bad_key';
+    return (
+      <span
+        title={
+          restricted
+            ? 'Hunter has restricted this account — log in at hunter.io to resolve. This is not a credit problem. Owners are coming from search engines and company websites.'
+            : badKey
+              ? 'Hunter rejected the API key — check HUNTER_API_KEY in server/.env'
+              : 'No Hunter API key — owners come from search engines and company websites only'
+        }
+        className={`shrink-0 rounded-md border px-2 py-1 text-xs font-medium ${
+          restricted || badKey
+            ? 'border-amber-200 bg-amber-50 text-amber-700'
+            : 'border-slate-200 bg-slate-50 text-slate-500'
+        }`}
+      >
+        {restricted ? 'Hunter restricted' : badKey ? 'Hunter key invalid' : 'Hunter off'}
+      </span>
+    );
+  }
+  const out = hunter.quotaExhausted
+    || (hunter.creditsRemaining != null && hunter.creditsRemaining <= hunter.reserve);
+  const tone = out
+    ? 'border-amber-200 bg-amber-50 text-amber-700'
+    : 'border-brand-200 bg-brand-50 text-brand-700';
+  const remaining = hunter.creditsRemaining != null ? hunter.creditsRemaining : '—';
+  return (
+    <span
+      title={[
+        hunter.plan ? `${hunter.plan} plan` : null,
+        `${remaining} search credits left`,
+        `${hunter.spentThisRun} spent this run (cap ${hunter.budget})`,
+        hunter.resetDate ? `resets ${hunter.resetDate}` : null,
+        out ? 'Paid lookups paused — falling back to search engines and company websites' : null,
+      ].filter(Boolean).join('\n')}
+      className={`shrink-0 rounded-md border px-2 py-1 text-xs font-medium tabular ${tone}`}
+    >
+      Hunter {hunter.spentThisRun}/{hunter.budget} · {remaining} left
+    </span>
   );
 }
 
@@ -65,15 +113,16 @@ export default function ProgressPanel({ state }) {
         <div>
           <div className="flex justify-between text-xs text-slate-500">
             <span>Owner lookup</span>
-            <span className="tabular text-slate-700"><AnimatedNumber value={state.phaseInfo.google.done} /> / {state.phaseInfo.google.total}</span>
+            <span className="tabular text-slate-700"><AnimatedNumber value={state.phaseInfo.owners.done} /> / {state.phaseInfo.owners.total}</span>
           </div>
-          <Bar done={state.phaseInfo.google.done} total={state.phaseInfo.google.total} tone="green" />
+          <Bar done={state.phaseInfo.owners.done} total={state.phaseInfo.owners.total} tone="green" />
         </div>
       </div>
 
-      {/* Ticker + errors */}
+      {/* Ticker + Hunter credits + errors */}
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
         <div className="truncate text-xs text-slate-500">{state.ticker || '—'}</div>
+        <HunterChip hunter={state.hunter} />
         {state.notices?.length > 0 && (
           <span
             title={state.notices.slice(-6).map((n) => n.message).join('\n')}

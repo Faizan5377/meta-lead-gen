@@ -2,7 +2,8 @@
 //   1. Harvest   — collect unique businesses (one longest-running ad each),
 //                  skipping anything already in the DB, up to the target.
 //   2. Contacts  — visit each business's Facebook page for email/phone/website.
-//   3. Google    — best-effort owner/founder lookup per business.
+//   3. Owners    — Hunter.io decision-maker lookup, falling back to search
+//                  engines and the company's own About page.
 //   4. Done      — export becomes available.
 //
 // Every phase is wrapped so a failure never crashes the run; per-item errors are
@@ -13,9 +14,10 @@ import { db } from './db.js';
 import { bus } from './eventStream.js';
 import { COUNTRIES } from './filters.js';
 import { store } from './store.js';
+import { hunter } from './enrich/hunter.js';
+import { resolveOwner } from './enrich/ownerResolver.js';
 import { scrapeFacebookContact } from './scraper/contactScraper.js';
 import { harvest, newPage } from './scraper/engine.js';
-import { scrapeOwnerInfo } from './scraper/ownerLookup.js';
 
 const countryName = (code) => COUNTRIES.find(c => c.code === code)?.name || code;
 
@@ -28,9 +30,16 @@ export async function runPipeline(runId) {
   emit(runId, { type: 'run_started', snapshot: store.snapshot(run) });
 
   try {
+    // Read the live Hunter credit balance before spending anything, so the run
+    // (and the UI) knows up front whether paid lookups are available.
+    if (config.ownerEnrichEnabled) {
+      run.hunter = await hunter.preflight();
+      emit(runId, { type: 'hunter_state', hunter: run.hunter });
+    }
+
     await harvestPhase(run);
     if (!run.cancelRequested) await contactsPhase(run);
-    if (!run.cancelRequested && config.googleEnrichEnabled) await googlePhase(run);
+    if (!run.cancelRequested && config.ownerEnrichEnabled) await ownersPhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
     run.errors.push({ scope: 'pipeline', message: err.message, ts: now() });
@@ -110,36 +119,41 @@ async function contactsPhase(run) {
   emit(run.id, { type: 'phase_done', phase: 'contacts', done: run.counts.contactsDone });
 }
 
-// ── Phase 3: Google owner enrichment ─────────────────────────────────────────
-async function googlePhase(run) {
-  run.phase = 'google';
+// ── Phase 3: owner enrichment (Hunter.io → search → website) ─────────────────
+async function ownersPhase(run) {
+  run.phase = 'owners';
   const targets = run.businesses.filter(b => b.page_name);
-  emit(run.id, { type: 'phase_started', phase: 'google', total: targets.length });
-  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'google', done: 0 }); return; }
+  emit(run.id, { type: 'phase_started', phase: 'owners', total: targets.length, hunter: hunter.budgetState() });
+  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'owners', done: 0 }); return; }
 
   await runPool(targets, Math.min(2, config.enrichConcurrency), run, async (page, biz) => {
-    store.patchBusiness(run, biz.business_key, { google_status: 'pending' });
-    emit(run.id, { type: 'google_progress', current: biz.page_name, done: run.counts.googleDone, total: targets.length });
+    store.patchBusiness(run, biz.business_key, { owner_status: 'pending' });
+    emit(run.id, { type: 'owner_progress', current: biz.page_name, done: run.counts.ownersDone, total: targets.length });
     let patch;
     try {
-      // Pass the website we scraped in the contacts phase — the company's own
-      // About/Team page is the most reliable owner source when search fails.
-      patch = await scrapeOwnerInfo(page, biz.page_name, countryName(biz.country), biz.contact_website);
+      // The contacts phase already found a website for many businesses; the
+      // resolver uses it both as a Hunter domain and as an About-page source.
+      patch = await resolveOwner(page, biz, {
+        countryCode: biz.country,
+        countryName: countryName(biz.country),
+        log: (msg) => run.log?.push?.(msg),
+      });
     } catch (err) {
-      patch = { google_status: 'failed' };
-      logItemError(run, 'google', biz, err);
+      patch = { owner_status: 'failed' };
+      logItemError(run, 'owners', biz, err);
     }
-    delete patch.error;
+    delete patch.owner_error;
     store.patchBusiness(run, biz.business_key, patch);
     db.updateBusiness(biz.business_key, patch);
-    run.counts.googleDone++;
+    run.counts.ownersDone++;
+    run.hunter = hunter.budgetState();
     emit(run.id, {
       type: 'business_owner', business_key: biz.business_key, patch,
-      done: run.counts.googleDone, total: targets.length,
+      done: run.counts.ownersDone, total: targets.length, hunter: run.hunter,
     });
   });
 
-  emit(run.id, { type: 'phase_done', phase: 'google', done: run.counts.googleDone });
+  emit(run.id, { type: 'phase_done', phase: 'owners', done: run.counts.ownersDone, hunter: hunter.budgetState() });
 }
 
 // ── Shared worker pool ───────────────────────────────────────────────────────
@@ -188,7 +202,8 @@ function finalize(run, status, message) {
   if (status === 'stopped') run.stoppedAt = now();
   emit(run.id, {
     type: 'run_finished', status, message: message || null,
-    counts: run.counts, dbStats: db.stats(), snapshot: store.snapshot(run),
+    counts: run.counts, dbStats: db.stats(), hunter: hunter.budgetState(),
+    snapshot: store.snapshot(run),
   });
 }
 

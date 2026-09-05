@@ -18,7 +18,7 @@ const DEFAULT_FILTERS = {
 
 const LAST_RUN_KEY = 'adharvester:lastRunId';
 
-const PHASE_LABEL = { idle: 'Idle', harvesting: 'Harvesting ads', contacts: 'Fetching contacts', google: 'Finding owners', done: 'Complete' };
+const PHASE_LABEL = { idle: 'Idle', harvesting: 'Harvesting ads', contacts: 'Fetching contacts', owners: 'Finding owners', done: 'Complete' };
 
 export default function App() {
   const [meta, setMeta] = useState(null);
@@ -106,9 +106,10 @@ export default function App() {
     return {
       businesses: B.length,
       followers: n((b) => b.followers > 0),
-      owner: n((b) => b.google_status === 'enriched' && b.owner_name),
-      email: n((b) => !!b.contact_email),
-      phone: n((b) => !!b.contact_phone),
+      owner: n((b) => b.owner_status === 'enriched' && b.owner_name),
+      ownerEmail: n((b) => !!b.owner_email),
+      email: n((b) => !!(b.contact_email || b.owner_email)),
+      phone: n((b) => !!(b.contact_phone || b.owner_phone)),
       website: n((b) => !!b.contact_website),
       skipped: state.counts.skippedKnown || 0,
     };

@@ -17,8 +17,10 @@ const BUSINESS_COLUMNS = [
   'cta_text', 'cta_type', 'title', 'body_text', 'link_url', 'display_domain',
   'display_format', 'image_url', 'video_url',
   'keyword', 'keywords', 'country',
-  'contact_email', 'contact_phone', 'contact_website', 'contact_status',
-  'owner_name', 'owner_title', 'owner_source', 'google_status',
+  'contact_email', 'contact_phone', 'contact_website', 'contact_status', 'email_source',
+  'owner_name', 'owner_title', 'owner_email', 'owner_linkedin', 'owner_phone',
+  'owner_confidence', 'owner_source', 'owner_status',
+  'company_domain', 'company_domain_source',
   'run_id', 'first_seen_at', 'last_updated_at',
 ];
 
@@ -50,6 +52,11 @@ class Database {
         );
         CREATE INDEX IF NOT EXISTS idx_business_run ON businesses(run_id);
         CREATE INDEX IF NOT EXISTS idx_seen_page ON seen_ads(page_id);
+        CREATE TABLE IF NOT EXISTS api_cache (
+          key       TEXT PRIMARY KEY,
+          payload   TEXT,
+          cached_at TEXT
+        );
       `);
       this.ok = true;
       this.#migrate();
@@ -131,6 +138,35 @@ class Database {
     } catch (err) { console.warn('[db] updateBusiness failed:', err.message); }
   }
 
+  // ── Generic API response cache ─────────────────────────────────────────────
+  // Backs the Hunter client so a paid lookup for a domain is never charged
+  // twice, across runs and across restarts. `null` is a legitimate cached value
+  // ("Hunter knows nothing about this domain"), so a miss returns `undefined`.
+  cacheGet(key, maxAgeMs) {
+    if (!this.ok) return undefined;
+    try {
+      const row = this.db.prepare('SELECT payload, cached_at FROM api_cache WHERE key = ?').get(key);
+      if (!row) return undefined;
+      if (maxAgeMs && row.cached_at) {
+        const age = Date.now() - new Date(row.cached_at).getTime();
+        if (Number.isFinite(age) && age > maxAgeMs) return undefined;
+      }
+      return JSON.parse(row.payload);
+    } catch {
+      return undefined;
+    }
+  }
+
+  cacheSet(key, value) {
+    if (!this.ok) return;
+    try {
+      this.db.prepare('INSERT OR REPLACE INTO api_cache (key, payload, cached_at) VALUES (?, ?, ?)')
+        .run(key, JSON.stringify(value ?? null), new Date().toISOString());
+    } catch (err) { console.warn('[db] cacheSet failed:', err.message); }
+  }
+
+  // Clearing leads deliberately KEEPS api_cache: those rows cost real Hunter
+  // credits and say nothing about which businesses you've already harvested.
   clear() {
     this.memSeenAds.clear();
     this.memSeenPages.clear();
@@ -139,7 +175,7 @@ class Database {
       try { this.db.exec('DELETE FROM seen_ads; DELETE FROM businesses;'); }
       catch (err) { console.warn('[db] clear failed:', err.message); }
     }
-    console.log('[db] cleared — starting fresh');
+    console.log('[db] cleared — starting fresh (API cache kept)');
     return this.stats();
   }
 

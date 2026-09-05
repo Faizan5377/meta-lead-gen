@@ -13,13 +13,20 @@ The moment you press **Start**, four phases run automatically, in sequence:
 1. **Harvest** — drives a headless Chromium over the Ad Library and intercepts Meta's internal GraphQL feed (far more robust than scraping the visible page). It captures **one unique ad per business** — the *longest continuously running* one — up to your target (default **5,000**). It keeps scrolling until the target is reached or the feed genuinely runs out of ads. It never opens a browser window.
 2. **De-dupe across searches** — every business is stored in a local SQLite database. On future searches, ads/businesses you already captured are **skipped automatically**, so you only ever see new results.
 3. **Facebook contacts** — visits each business's Facebook page and scrapes email, phone, and website.
-4. **Owner lookup** — best-effort search for the owner / founder / CEO. It queries the search engines that survive a headless browser (Brave first, then Ecosia and Startpage — Google and Bing block automation outright), and if those come up empty it reads the company's own About / Team page using the website found in step 3.
+4. **Owner lookup** — finds the owner / founder / decision maker, cheapest and most reliable source first:
+   1. **Hunter.io** — the primary source. Resolves the business to a *domain* and returns the decision maker's name, role, email, and LinkedIn. Because it is credit-metered, every paid call is gated behind two free ones (see [Hunter.io](#hunterio-owner-enrichment) below).
+   2. **Search engines** — Startpage (Google's index), Ecosia (Bing's), Brave, DuckDuckGo's no-JS endpoint and Mojeek. Google and Bing block headless browsers outright, so we reach the same indexes through front-ends that answer a plain request. LinkedIn profile titles ("Jane Doe – Founder – Acme | LinkedIn") are parsed structurally, as they're machine-generated and highly reliable.
+   3. **The company's own website** — the About / Team page, discovered from the site's real navigation rather than a fixed list of guessed paths.
+
+   Owner-operated professional practices (dentists, clinics, law firms) rarely print the word "Owner", so the extractor also recognises **"Dr. Joshua Millsaps"** and scores it much higher when the business carries that surname ("Millsaps Dentistry") — an unambiguous ownership signal.
 
 Every phase is wrapped so a failure is logged and streamed but **never crashes the run**. The **Export** button stays disabled until all four phases finish, then downloads a single CSV — UTF-8 with a BOM, CRLF line endings and human-readable headers, with every field sanitised to one line so a business is always exactly one row in Excel, Sheets or pandas.
 
 ### What you get per business
 
-Followers · advertiser category · country · matched keyword(s) · active status · ad start date & days running · CTA · media format · ad copy · destination link · Facebook page link · ad-snapshot link · email · phone · website · owner name, title & source · library id · numeric page id.
+Followers · advertiser category · country · matched keyword(s) · active status · ad start date & days running · CTA · media format · ad copy · destination link · Facebook page link · ad-snapshot link · email · phone · website · company domain · owner name, title, **email, phone, LinkedIn, confidence** & source · library id · numeric page id.
+
+**Owner confidence** is deliberately conservative. Business names are not unique — there are many companies called "Basecamp" — so a name inferred from search text is capped at **65**, corroboration across independent sources at **80**, and only Hunter (which resolves through a specific domain) goes higher. A `not_found` is reported honestly rather than filled with a confident guess.
 
 ---
 
@@ -40,14 +47,15 @@ Every filter has an **ⓘ** marker that explains what it does on hover.
 
 ## Quick start
 
-**Requirements:** Node.js **22.5+** (for the built-in `node:sqlite`) and macOS / Linux / WSL.
+**Requirements:** Node.js **22.5+** (for the built-in `node:sqlite`) and macOS / Linux / WSL. An `.nvmrc` is included — run `nvm use` if you juggle versions, since Node 20 rejects the `--experimental-sqlite` flag the scripts pass.
 
 ```bash
 # 1. Backend
 cd server
 npm install
 npx playwright install chromium
-cp .env.example .env        # optional — sensible defaults work out of the box
+cp .env.example .env        # then add HUNTER_API_KEY for owner enrichment
+npm test                    # unit tests for the enrichment logic
 
 # 2. Frontend
 cd ../client
@@ -105,9 +113,43 @@ Open **http://localhost:5173**. The scraper runs **headless** — no browser win
 | `STABLE_SCROLLS_TO_STOP` | `5` | Stop after N scrolls that surface no new ads |
 | `SCROLL_SETTLE_MS` | `2200` | Pause after each scroll so the next feed page loads |
 | `ENRICH_CONCURRENCY` | `3` | Parallel pages for contact / owner enrichment |
-| `GOOGLE_ENRICH` | `true` | Toggle the automatic owner-lookup phase |
+| `OWNER_ENRICH` | `true` | Toggle the automatic owner-lookup phase (`GOOGLE_ENRICH` still works) |
+| `OWNER_SEARCH_ENABLED` | `true` | Toggle the search-engine fallback |
+| `HUNTER_API_KEY` | — | Hunter.io key. Without it, owners come from search + website only |
+| `HUNTER_ENABLED` | `true` | Master switch for Hunter |
+| `HUNTER_MAX_CREDITS_PER_RUN` | `100` | Hard cap on paid Hunter calls in one run |
+| `HUNTER_MIN_CREDITS_RESERVE` | `10` | Never spend below this balance |
+| `HUNTER_CACHE_DAYS` | `30` | How long a Hunter answer is reused before re-paying |
 | `DB_PATH` | `server/data/leads.db` | SQLite database location |
 | `STORAGE_STATE` | — | Optional Playwright session JSON for logged-in scraping |
+
+---
+
+## Hunter.io owner enrichment
+
+Hunter is the most accurate owner source, but its credits are metered monthly while a single harvest can surface thousands of businesses. So **paid calls are gated behind free ones**, and most businesses cost nothing:
+
+| Step | Endpoint | Cost | Purpose |
+|---|---|---|---|
+| 1 | `domain-finder` | **free** | Business name → domain, when Facebook listed no website |
+| 2 | `email-count` | **free** | Does Hunter know any *executive* at this domain? |
+| 3 | `domain-search` | 1 credit | Only if step 2 said yes — returns the decision maker |
+
+On top of that gate there are three more guards: a per-run cap (`HUNTER_MAX_CREDITS_PER_RUN`), a balance floor (`HUNTER_MIN_CREDITS_RESERVE`), and a **persistent cache** in SQLite so the same domain is never paid for twice — across runs and restarts. Clearing the leads database deliberately keeps that cache, since those rows cost real credits.
+
+Domain matching is strict on purpose: a wrong domain yields a wrong owner, which is worse than none. A candidate domain is only accepted if its slug matches the business name, preferring the country TLD for a local business.
+
+The credit balance is read live at the start of every run and shown in the dashboard. If Hunter is unavailable for any reason — no key, a rejected key, exhausted credits, or an account restriction — the run **degrades to search + website lookup instead of failing**, and the UI says which.
+
+Verify the integration without running a harvest:
+
+```bash
+cd server
+npm run hunter:check              # account, credits, and the free gate — spends nothing
+npm run hunter:check -- --spend acme.com   # allow the one paid call, end to end
+npm run owner:check               # the full owner chain on sample businesses
+npm run owner:check -- "Some Business" US https://theirsite.com
+```
 
 ---
 
@@ -120,17 +162,27 @@ server/  (Node + Fastify + Playwright + node:sqlite, Server-Sent Events)
     config.js            .env loader
     filters.js           Full Meta filter definitions, help text + validation
     urlBuilder.js        Ad Library search-URL builder
-    db.js                SQLite: seen_ads + businesses (dedup + persistence)
+    db.js                SQLite: seen_ads + businesses + api_cache
     store.js             Run state + "one longest-running ad per business"
-    orchestrator.js      Harvest → contacts → owner pipeline (auto, resilient)
+    orchestrator.js      Harvest → contacts → owners pipeline (auto, resilient)
     exporter.js          Single CSV export
     scraper/
       engine.js          Headless GraphQL-feed harvester
       feedParser.js      GraphQL node → normalized ad record
       contactScraper.js  Facebook page → email / phone / website
-      googleEnrichment.js  Best-effort owner / founder lookup (Google + Bing)
       parsers.js         followers / dates / link-decode helpers
       humanize.js        jittered delays + human-like scrolling
+    enrich/
+      ownerResolver.js   The owner chain: Hunter → search → website
+      hunter.js          Hunter.io client: gating, budget, cache, retries
+      searchOwner.js     Multi-engine, multi-query search + LinkedIn parsing
+      websiteOwner.js    About/Team discovery on the company's own site
+      personNames.js     Name/role extraction, validation and scoring (pure)
+  scripts/
+    hunter-check.js      Live Hunter diagnostic
+    owner-check.js       Live owner-chain diagnostic
+  test/
+    enrich.test.js       Unit tests for the pure enrichment logic
 
 client/  (Vite + React + Tailwind + Radix + lucide-react)
   src/

@@ -7,11 +7,12 @@
 export const initialState = {
   runId: null,
   status: 'idle',        // idle | running | finished | stopped | error
-  phase: 'idle',         // idle | harvesting | contacts | google | done
+  phase: 'idle',         // idle | harvesting | contacts | owners | done
   filters: null,
   target: 0,
-  counts: { rawSeen: 0, kept: 0, contactsDone: 0, googleDone: 0, skippedKnown: 0 },
-  phaseInfo: { contacts: { done: 0, total: 0 }, google: { done: 0, total: 0 } },
+  counts: { rawSeen: 0, kept: 0, contactsDone: 0, ownersDone: 0, skippedKnown: 0 },
+  phaseInfo: { contacts: { done: 0, total: 0 }, owners: { done: 0, total: 0 } },
+  hunter: null,          // { creditsRemaining, spentThisRun, budget, plan, ... }
   businesses: [],
   index: {},             // business_key -> array index
   errors: [],
@@ -40,6 +41,7 @@ function fromSnapshot(state, snap) {
     filters: snap.filters ?? state.filters,
     target: snap.target ?? state.target,
     counts: snap.counts ?? state.counts,
+    hunter: snap.hunter ?? state.hunter,
     businesses,
     index: reindex(businesses),
     exportReady: !!snap.exportReady,
@@ -54,12 +56,16 @@ export function reducer(state, ev) {
     case 'phase_started': {
       const phaseInfo = { ...state.phaseInfo };
       if (ev.phase === 'contacts') phaseInfo.contacts = { done: 0, total: ev.total || 0 };
-      if (ev.phase === 'google') phaseInfo.google = { done: 0, total: ev.total || 0 };
-      return { ...state, phase: ev.phase, phaseInfo, ticker: phaseLabel(ev.phase) };
+      if (ev.phase === 'owners') phaseInfo.owners = { done: 0, total: ev.total || 0 };
+      return { ...state, phase: ev.phase, phaseInfo, hunter: ev.hunter ?? state.hunter, ticker: phaseLabel(ev.phase) };
     }
 
     case 'phase_done':
-      return { ...state, ticker: `${phaseLabel(ev.phase)} — done` };
+      return { ...state, hunter: ev.hunter ?? state.hunter, ticker: `${phaseLabel(ev.phase)} — done` };
+
+    // Live Hunter credit balance, emitted at run start and as credits are spent.
+    case 'hunter_state':
+      return { ...state, hunter: ev.hunter ?? state.hunter };
 
     case 'harvest_progress':
       return {
@@ -103,18 +109,19 @@ export function reducer(state, ev) {
 
     case 'business_owner': {
       const i = state.index[ev.business_key];
-      const phaseInfo = { ...state.phaseInfo, google: { done: ev.done ?? state.phaseInfo.google.done, total: ev.total ?? state.phaseInfo.google.total } };
-      const counts = { ...state.counts, googleDone: ev.done ?? state.counts.googleDone };
-      if (i == null) return { ...state, phaseInfo, counts };
+      const phaseInfo = { ...state.phaseInfo, owners: { done: ev.done ?? state.phaseInfo.owners.done, total: ev.total ?? state.phaseInfo.owners.total } };
+      const counts = { ...state.counts, ownersDone: ev.done ?? state.counts.ownersDone };
+      const hunter = ev.hunter ?? state.hunter;
+      if (i == null) return { ...state, phaseInfo, counts, hunter };
       const businesses = state.businesses.slice();
       businesses[i] = { ...businesses[i], ...ev.patch };
-      return { ...state, businesses, phaseInfo, counts };
+      return { ...state, businesses, phaseInfo, counts, hunter };
     }
 
     case 'contact_progress':
       return { ...state, ticker: `Contacts ${ev.done}/${ev.total} — ${ev.current || ''}` };
 
-    case 'google_progress':
+    case 'owner_progress':
       return { ...state, ticker: `Owner lookup ${ev.done}/${ev.total} — ${ev.current || ''}` };
 
     case 'error':
@@ -131,6 +138,7 @@ export function reducer(state, ev) {
         phase: 'done',
         counts: ev.counts || state.counts,
         dbStats: ev.dbStats || state.dbStats,
+        hunter: ev.hunter || state.hunter,
         exportReady: true,
         ticker: ev.status === 'stopped' ? 'Stopped' : ev.status === 'error' ? `Error: ${ev.message || ''}` : 'Complete',
       };
@@ -148,16 +156,19 @@ export function reducer(state, ev) {
 }
 
 function phaseLabel(p) {
-  return { harvesting: 'Harvesting ads', contacts: 'Fetching Facebook contacts', google: 'Finding owners on Google', done: 'Done' }[p] || p;
+  return { harvesting: 'Harvesting ads', contacts: 'Fetching Facebook contacts', owners: 'Finding owners', done: 'Done' }[p] || p;
 }
 
 export function subscribeToRun(runId, onEvent) {
   const es = new EventSource(`/api/runs/${runId}/events`);
   const handler = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
+  // EventSource listens per event NAME, so every type the server emits must be
+  // listed here or it is silently dropped.
   const types = [
     'run_started', 'phase_started', 'phase_done', 'harvest_progress',
     'business_added', 'business_updated', 'business_enriched', 'business_owner',
-    'contact_progress', 'google_progress', 'error', 'notice', 'run_finished',
+    'contact_progress', 'owner_progress', 'hunter_state',
+    'error', 'notice', 'run_finished',
   ];
   for (const t of types) es.addEventListener(t, handler);
   es.onerror = () => {/* EventSource auto-retries */};

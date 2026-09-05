@@ -16,17 +16,51 @@ function Contact({ status, value, kind }) {
   return <a href={value} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline" title={value}>{safeHost(value)}</a>;
 }
 
+// Where an owner came from, at a glance. Hunter is verified data; the scraped
+// sources are inferred, so they read as muted.
+function SourceBadge({ source, confidence }) {
+  if (!source) return null;
+  const isHunter = source === 'hunter';
+  const isLinkedIn = source.startsWith('linkedin:');
+  const label = isHunter ? 'Hunter' : isLinkedIn ? 'LinkedIn' : source.startsWith('website:') ? 'Website' : source;
+  const tone = isHunter
+    ? 'border-brand-200 bg-brand-50 text-brand-700'
+    : isLinkedIn
+      ? 'border-sky-200 bg-sky-50 text-sky-700'
+      : 'border-slate-200 bg-slate-50 text-slate-500';
+  return (
+    <span
+      title={`Source: ${source}${confidence != null ? ` · confidence ${confidence}%` : ''}`}
+      className={`inline-block rounded border px-1 py-px text-[9px] font-medium uppercase tracking-wide ${tone}`}
+    >
+      {label}{confidence != null ? ` ${confidence}` : ''}
+    </span>
+  );
+}
+
 function Owner({ b }) {
-  if (b.google_status === 'pending') return <span className="inline-block h-3 w-20 shimmer" />;
+  if (b.owner_status === 'pending') return <span className="inline-block h-3 w-20 shimmer" />;
   if (b.owner_name) {
     return (
-      <div>
-        <div className="font-medium text-slate-800">{b.owner_name}</div>
-        {b.owner_title && <div className="text-[11px] text-slate-400">{b.owner_title}</div>}
+      <div className="space-y-0.5">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate font-medium text-slate-800" title={b.owner_name}>{b.owner_name}</span>
+          {b.owner_linkedin && (
+            <a href={b.owner_linkedin} target="_blank" rel="noreferrer" title="LinkedIn profile"
+              className="shrink-0 text-[10px] text-sky-600 hover:underline">in</a>
+          )}
+        </div>
+        {b.owner_title && <div className="truncate text-[11px] text-slate-400" title={b.owner_title}>{b.owner_title}</div>}
+        {b.owner_email && (
+          <a href={`mailto:${b.owner_email}`} title={b.owner_email}
+            className="block truncate text-[11px] text-brand-600 hover:underline">{b.owner_email}</a>
+        )}
+        <SourceBadge source={b.owner_source} confidence={b.owner_confidence} />
       </div>
     );
   }
-  if (b.google_status === 'blocked') return <span className="text-[11px] text-amber-500" title="Search engine blocked the lookup">blocked</span>;
+  if (b.owner_status === 'blocked') return <span className="text-[11px] text-amber-500" title="Every search engine blocked the lookup">blocked</span>;
+  if (b.owner_status === 'not_found') return <span className="text-[11px] text-slate-400" title="No owner published anywhere we can reach">not found</span>;
   return <span className="text-slate-300">—</span>;
 }
 
@@ -56,7 +90,7 @@ export default function ResultsTable({ businesses }) {
     let arr = businesses;
     if (s) {
       arr = arr.filter(b =>
-        `${b.page_name || ''} ${b.owner_name || ''} ${(b.page_categories || []).join(' ')} ${b.contact_email || ''} ${b.display_domain || ''} ${b.country || ''} ${(b.keywords || [b.keyword]).join(' ')}`
+        `${b.page_name || ''} ${b.owner_name || ''} ${b.owner_title || ''} ${b.owner_email || ''} ${(b.page_categories || []).join(' ')} ${b.contact_email || ''} ${b.company_domain || ''} ${b.display_domain || ''} ${b.country || ''} ${(b.keywords || [b.keyword]).join(' ')}`
           .toLowerCase().includes(s));
     }
     arr = arr.slice().sort((a, b) => {
