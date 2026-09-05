@@ -12,7 +12,7 @@
 
 import { config } from '../config.js';
 import { hunter } from './hunter.js';
-import { titleRank } from './personNames.js';
+import { ownerFromBusinessName, titleRank } from './personNames.js';
 import { searchOwner } from './searchOwner.js';
 import { ownerFromWebsite } from './websiteOwner.js';
 
@@ -109,11 +109,13 @@ function hunterConfidence(email) {
 
 // ── Step 1: Hunter.io ───────────────────────────────────────────────────────
 async function fromHunter(biz, countryCode, log) {
-  if (!hunter.enabled) return { result: null, domain: null };
-
-  // a) A domain from the Facebook page costs nothing.
+  // A domain from the Facebook page costs nothing and is useful even when
+  // Hunter is unavailable — it drives the website lookup and populates
+  // company_domain — so it is resolved BEFORE the Hunter short-circuit.
   let domain = domainFromWebsite(biz.contact_website);
   let domainSource = domain ? 'facebook' : null;
+
+  if (!hunter.enabled) return { result: null, domain, domainSource };
 
   // b) Otherwise ask Hunter's FREE domain-finder.
   if (!domain && biz.page_name) {
@@ -123,7 +125,7 @@ async function fromHunter(biz, countryCode, log) {
       if (domain) domainSource = 'hunter:domain-finder';
     }
   }
-  if (!domain) return { result: null, domain: null };
+  if (!domain) return { result: null, domain: null, domainSource: null };
 
   // c) FREE gate — does Hunter know any executive here? If not, a credit is
   //    guaranteed to be wasted, so we never spend one.
@@ -194,6 +196,19 @@ export async function resolveOwner(page, biz, { countryCode, countryName, log } 
   let searchBlocked = false;
 
   try {
+    // 0. The page name itself. "Dr. Josh Parker Orthodontist" is the business
+    //    naming its own owner — free, instant, and more reliable than search.
+    const fromName = ownerFromBusinessName(businessName);
+    if (fromName) {
+      best = {
+        name: fromName.name,
+        title: fromName.title,
+        confidence: 75,
+        source: 'page-name',
+        email: null, linkedin: null, phone: null,
+      };
+    }
+
     // 1. Hunter.io
     try {
       const h = await fromHunter(biz, countryCode, log);

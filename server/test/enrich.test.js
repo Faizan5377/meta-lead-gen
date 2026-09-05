@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import {
   bestCandidate, businessTokens, CEILING_CORROBORATED, CEILING_SINGLE_SOURCE,
   cleanName, harvestCandidates, isPlausibleName, mentionsBusiness,
-  normalizeTitle, scoreToConfidence, titleRank,
+  normalizeTitle, ownerFromBusinessName, scoreToConfidence, titleRank,
 } from '../src/enrich/personNames.js';
 import { domainFromWebsite, pickDomain, pickOwnerEmail } from '../src/enrich/ownerResolver.js';
 
@@ -131,6 +131,88 @@ describe('association guard', () => {
   it('ignores generic words when deciding what is distinctive', () => {
     assert.deepEqual(businessTokens('The Dental Studio Group'), []);
     assert.deepEqual(businessTokens('Basecamp'), ['basecamp']);
+  });
+});
+
+describe('owner named in the business name', () => {
+  it('reads a Dr. prefix page name', () => {
+    // Live Ad Library advertiser that previously returned nothing.
+    assert.equal(ownerFromBusinessName('Dr. Josh Parker Orthodontist').name, 'Josh Parker');
+    assert.equal(ownerFromBusinessName('Dr. Josh Parker Orthodontist').title, 'Doctor');
+  });
+  it('reads a credential-suffixed page name', () => {
+    assert.equal(ownerFromBusinessName('Joshua M. Millsaps, DDS, PA').name, 'Joshua M. Millsaps');
+  });
+  it('does not turn an ordinary business name into a person', () => {
+    for (const n of ['Willo Cleans', 'Knight Pediatric Dentistry', 'Great Lakes Dental',
+                     'Streamline Dental Implants', 'Seaside Dental']) {
+      assert.equal(ownerFromBusinessName(n), null, `${n} should not yield a person`);
+    }
+  });
+});
+
+describe('junk tokens swept into names', () => {
+  it('rejects odd internal capitals', () => {
+    // Live regression: "Winters AKa" was returned as an owner.
+    assert.ok(!isPlausibleName('Winters AKa'));
+    assert.ok(!isPlausibleName('John SmileNow'));
+  });
+  it('still accepts genuine internal capitals', () => {
+    for (const n of ['Ronald McDonald', 'Cathy MacLeod', "Sean O'Brien", "Marco D'Angelo"]) {
+      assert.ok(isPlausibleName(n), `${n} should be accepted`);
+    }
+  });
+  it('trims a layout word rather than discarding the whole name', () => {
+    // Live regression: "Seth Senestraro Above" — the owner is real, only the
+    // trailing layout word is junk, so trim it instead of losing the lead.
+    assert.equal(cleanName('Seth Senestraro Above'), 'Seth Senestraro');
+    assert.ok(isPlausibleName(cleanName('Seth Senestraro Above')));
+    const c = harvestCandidates('Dr. Seth Senestraro Above', 'Senestraro Family Orthodontics');
+    assert.equal(bestCandidate(c).name, 'Seth Senestraro');
+  });
+  it('never trims below two tokens', () => {
+    assert.equal(cleanName('Read More'), 'Read More');   // stays invalid, not emptied
+  });
+  it('rejects positional words appended to a name', () => {
+    // Live regression: "Seth Senestraro Above".
+    assert.ok(!isPlausibleName('Seth Senestraro Above'));
+    assert.ok(isPlausibleName('Seth Senestraro'));
+  });
+});
+
+describe('directory-page contamination', () => {
+  // These are VERBATIM snippets from a live Serper query for "Knight Pediatric
+  // Dentistry". Directory pages list many businesses, so each names a real
+  // person who runs a DIFFERENT practice. A character-window association let
+  // all three through; sentence scoping must reject them.
+  const BIZ = 'Knight Pediatric Dentistry';
+
+  it('rejects a founder belonging to a neighbouring listing', () => {
+    const s = "Everyone let's wish our founder Candace a very happy birthday! Not only does she work 2 jobs, but ... Knight Pediatric Dentistry. Follow.";
+    assert.equal(harvestCandidates(s, BIZ, 0, { requireAssociation: true }).length, 0);
+  });
+
+  it('rejects a "founded by" from an adjacent business', () => {
+    const s = 'Knight Pediatric Dentistry - Kids Dentist near me - Centuria, Wisconsin. Smiles Inc was founded by Dr. Freeman Rosenblum.';
+    const names = harvestCandidates(s, BIZ, 0, { requireAssociation: true }).map((c) => c.name);
+    assert.ok(!names.includes('Freeman Rosenblum'), `leaked: ${names}`);
+  });
+
+  it('rejects an unrelated CEO on a jobs listing', () => {
+    const s = 'Knight Pediatric Dentistry. Registered Dental Assistant. Saint Paul, MN. $28.00. CEO Jennifer DeCubellis.';
+    const names = harvestCandidates(s, BIZ, 0, { requireAssociation: true }).map((c) => c.name);
+    assert.ok(!names.includes('Jennifer DeCubellis'), `leaked: ${names}`);
+  });
+
+  it('still accepts the real owner named in the same sentence', () => {
+    const s = 'At Knight Pediatric Dentistry, the practice was founded by Robert Knight in 2009.';
+    assert.equal(bestCandidate(harvestCandidates(s, BIZ, 0, { requireAssociation: true })).name, 'Robert Knight');
+  });
+
+  it('parses the surname-first directory format', () => {
+    // Live Superpages result — this was the actual practice owner.
+    const c = harvestCandidates('10. Knight, David James, DDS', BIZ);
+    assert.equal(bestCandidate(c).name, 'David James Knight');
   });
 });
 

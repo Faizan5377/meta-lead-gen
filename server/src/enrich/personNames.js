@@ -78,12 +78,31 @@ const STOP_WORDS = new Set([
   'chief', 'executive', 'officer', 'managing', 'director', 'president', 'founder',
   'owner', 'ceo', 'principal', 'partner', 'manager', 'view', 'profile', 'connect',
   'message', 'experience', 'education', 'skills', 'endorsements', 'posts',
+  // Positional / call-to-action words that get swept onto the end of a name
+  // when a page breaks a line oddly ("Seth Senestraro Above").
+  'above', 'below', 'near', 'nearby', 'book', 'booking', 'appointment', 'call',
+  'now', 'today', 'free', 'get', 'start', 'join', 'save', 'shop', 'find', 'open',
+  'closed', 'next', 'previous', 'back', 'first', 'last', 'aka', 'formerly',
+  'family', 'kids', 'care', 'smile', 'smiles', 'office', 'practice', 'location',
+  'locations', 'patients', 'patient', 'insurance', 'emergency', 'schedule',
 ]);
 
 const NAME_SHAPE = new RegExp(`^${NAME}$`);
 
+// Page-layout words that get glued onto a name when a line breaks oddly. These
+// are TRIMMED rather than used to reject the whole candidate, so
+// "Seth Senestraro Above" recovers as "Seth Senestraro" instead of being lost.
+const TRIM_WORDS = new Set([
+  'above', 'below', 'near', 'nearby', 'book', 'booking', 'appointment', 'call',
+  'now', 'today', 'free', 'get', 'start', 'join', 'save', 'shop', 'find', 'open',
+  'closed', 'next', 'previous', 'back', 'more', 'less', 'read', 'learn', 'view',
+  'click', 'here', 'home', 'about', 'contact', 'menu', 'close', 'share',
+  'follow', 'subscribe', 'schedule', 'reviews', 'review', 'photos', 'hours',
+  'location', 'locations', 'directions', 'map', 'welcome', 'meet', 'our', 'your',
+]);
+
 // Strip a role or honorific that got swept into the name ("CEO Jane Doe",
-// "Jane Doe Founder", "Dr. Jane Doe").
+// "Jane Doe Founder", "Dr. Jane Doe"), plus any layout words on either end.
 export function cleanName(raw) {
   let name = String(raw || '')
     .replace(/[‘’]/g, "'")
@@ -97,7 +116,13 @@ export function cleanName(raw) {
     name = name.replace(LEADING_TITLE_RE, '').replace(TRAILING_TITLE_RE, '').trim();
     if (name === before) break;
   }
-  return name;
+
+  // Trim layout words from either end, never below two tokens.
+  let parts = name.split(/\s+/).filter(Boolean);
+  const bare = (t) => t.replace(/[^a-zA-Z]/g, '').toLowerCase();
+  while (parts.length > 2 && TRIM_WORDS.has(bare(parts[parts.length - 1]))) parts.pop();
+  while (parts.length > 2 && TRIM_WORDS.has(bare(parts[0]))) parts.shift();
+  return parts.join(' ');
 }
 
 // Would this string plausibly be a person's name, and not this business's own?
@@ -117,6 +142,15 @@ export function isPlausibleName(raw, businessName = '') {
   // Real apostrophe names are O'Brien / D'Angelo, where the apostrophe is
   // followed by a capital — not by a lowercase verb ending.
   if (tokens.some((t) => /['’](?:s|m|re|ve|ll|d|t)$/i.test(t))) return false;
+
+  // Odd internal capitals ("AKa", "SmileNow") are web-page artefacts, not
+  // names. McDonald / MacLeod / O'Brien / D'Angelo are the legitimate forms.
+  if (tokens.some((t) => {
+    const rest = t.slice(1);
+    if (!/[A-Z]/.test(rest)) return false;
+    if (/^(?:Mc|Mac)[A-Z]/.test(t)) return false;
+    return !/['’\-][A-Z]/.test(t);          // caps must follow an apostrophe/hyphen
+  })) return false;
 
   // Every token must look like a word (or an initial), and none may be a stop word.
   for (const t of tokens) {
@@ -197,6 +231,15 @@ const PATTERNS = [
     re: new RegExp(`\\b(?:Dr|Doctor|Dra)\\.?\\s+(${NAME})`, 'g'),
     map: (m) => [m[1], 'Doctor'],
   },
+  // "Knight, David James, DDS" — the surname-first form professional
+  // directories use. Requiring a credential suffix keeps this precise, and the
+  // name is re-ordered to First Last. Observed live: this was the actual owner
+  // of Knight Pediatric Dentistry, in a listing the other patterns all missed.
+  {
+    weight: 5,
+    re: new RegExp(`\\b(${WORD}),\\s*(${WORD}(?:\\s+${WORD})?),\\s*(?:DDS|DMD|MD|DO|DVM|OD|DPM|PhD|Esq|CPA|LPC|LCSW)\\b`, 'g'),
+    map: (m) => [`${m[2]} ${m[1]}`, 'Doctor'],
+  },
 ];
 
 // Words too generic to prove a text is talking about a particular business.
@@ -207,6 +250,12 @@ const GENERIC_BIZ_WORDS = new Set([
   'fitness', 'gym', 'salon', 'spa', 'law', 'legal', 'realty', 'homes', 'home',
   'properties', 'property', 'estate', 'auto', 'cafe', 'restaurant', 'shop',
   'store', 'official', 'page', 'best', 'top', 'new', 'your', 'our',
+  // Speciality words: descriptive, not identifying. Dropping them leaves the
+  // distinctive part of the name ("Senestraro" in "Senestraro Family
+  // Orthodontics"), which is what association should actually key on.
+  'orthodontics', 'orthodontist', 'pediatric', 'paediatric', 'family', 'implants',
+  'implant', 'cosmetic', 'aesthetic', 'aesthetics', 'wellness', 'surgery',
+  'surgical', 'oral', 'smiles', 'smile', 'care', 'health', 'healthcare',
 ]);
 
 // The distinctive words of a business name — what must show up nearby for a
@@ -228,7 +277,25 @@ export function mentionsBusiness(segment, tokens) {
   return tokens.length === 1 ? hits >= 1 : hits >= 2;
 }
 
-const ASSOCIATION_WINDOW = 260;
+// Association is scoped to the SENTENCE containing the match, not a character
+// window. Directory pages (Yelp, YellowPages, Glassdoor) list many businesses
+// on one page, so a window wide enough to be useful will always straddle a
+// neighbouring listing — that's how "our founder Candace ... Knight Pediatric
+// Dentistry" produced Candace as Knight's owner. A sentence is the smallest
+// unit that reliably talks about one business.
+const SENTENCE_SPLIT = /(?<=[.!?])[\s"'’)\]]+|[\n\r]+|\s[|·]\s|\s[—–]\s|\.{3}/g;
+
+function sentenceAt(text, index) {
+  SENTENCE_SPLIT.lastIndex = 0;
+  let start = 0;
+  let m;
+  while ((m = SENTENCE_SPLIT.exec(text))) {
+    const end = m.index + m[0].length;
+    if (index < m.index) return text.slice(start, m.index);
+    start = end;
+  }
+  return text.slice(start);
+}
 
 // Pull every candidate {name, title, weight} out of one block of text.
 //
@@ -256,10 +323,8 @@ export function harvestCandidates(text, businessName = '', sourceWeight = 0, { r
 
       let bonus = 0;
       if (requireAssociation) {
-        const from = Math.max(0, m.index - ASSOCIATION_WINDOW);
-        const window = clean.slice(from, m.index + m[0].length + ASSOCIATION_WINDOW);
-        if (!mentionsBusiness(window, tokens)) continue;
-        bonus = 4;                              // named alongside the business
+        if (!mentionsBusiness(sentenceAt(clean, m.index), tokens)) continue;
+        bonus = 4;                              // named in the same sentence
       }
 
       // The business carries this person's surname ("Millsaps Dentistry" ->
@@ -288,6 +353,35 @@ export function normalizeTitle(raw) {
   if (/^chief executive/i.test(t)) return 'CEO';
   // Title-case a lowercase match so the CSV reads consistently.
   return t.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+// Many small advertisers put the owner's name straight in the page name:
+// "Dr. Josh Parker Orthodontist", "Joshua M. Millsaps, DDS, PA". That's the
+// business telling us who runs it, so it beats anything inferred from search.
+//
+// Precision comes from requiring an explicit signal — a "Dr." prefix or a
+// professional credential. Without that, "Willo Cleans" would read as a person.
+const DR_PREFIX_RE = new RegExp(`^\\s*(?:Dr|Dra|Doctor)\\.?\\s+(${NAME})`, 'i');
+const CREDENTIAL_RE = new RegExp(`^\\s*(${NAME})\\s*,\\s*(?:DDS|DMD|MD|DO|DVM|OD|DPM|PhD|Esq|CPA|LPC|LCSW|MBA)\\b`, 'i');
+
+export function ownerFromBusinessName(pageName) {
+  const raw = String(pageName || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return null;
+
+  for (const re of [DR_PREFIX_RE, CREDENTIAL_RE]) {
+    const m = raw.match(re);
+    if (!m) continue;
+    // Drop any trade word trailing the name ("Josh Parker Orthodontist").
+    const name = cleanName(m[1])
+      .replace(/\s+(?:Orthodontist|Orthodontics|Dentist|Dentistry|DDS|DMD|MD|Attorney|Realtor|Realty|Clinic|Practice|Center|Centre)$/i, '')
+      .trim();
+    // Deliberately NOT isPlausibleName: that rejects names overlapping the
+    // business name, which is precisely the case we're handling here.
+    if (!new RegExp(`^${NAME}$`).test(name)) continue;
+    if (ORG_WORDS.test(name)) continue;
+    return { name, title: /^\s*(?:Dr|Dra|Doctor)\b/i.test(raw) ? 'Doctor' : null };
+  }
+  return null;
 }
 
 // Merge candidates by person and pick the best. A name that appears in several

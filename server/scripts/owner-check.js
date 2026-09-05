@@ -13,13 +13,16 @@ import { newPage, shutdown } from '../src/scraper/engine.js';
 
 const argv = process.argv.slice(2);
 
-// Real businesses with a publicly stated owner, so a correct run is verifiable.
+// Real advertisers harvested from the Ad Library. Deliberately small local
+// businesses rather than global brands: brand names like "Basecamp" are shared
+// by many companies, so they measure name ambiguity rather than lookup quality.
 const SAMPLES = argv.length
   ? [{ page_name: argv[0], country: argv[1] || 'US', contact_website: argv[2] || null }]
   : [
-      { page_name: 'Basecamp', country: 'US', contact_website: 'https://basecamp.com' },
-      { page_name: 'Patagonia', country: 'US', contact_website: 'https://www.patagonia.com' },
-      { page_name: 'Ben & Jerry\'s', country: 'US', contact_website: 'https://www.benjerry.com' },
+      { page_name: 'Knight Pediatric Dentistry', country: 'US', contact_website: null },
+      { page_name: 'Joshua M. Millsaps, DDS, PA', country: 'US', contact_website: 'http://millsapsdentistry.com/' },
+      { page_name: 'Hetrick Family Dentistry', country: 'US', contact_website: 'https://www.hetrickfamilydentistry.com/' },
+      { page_name: 'Seaside Dental of Jacksonville Beach', country: 'US', contact_website: 'https://www.seasidedentaljax.com/' },
     ];
 
 const COUNTRY_NAME = { US: 'United States', GB: 'United Kingdom', AE: 'United Arab Emirates', NL: 'Netherlands' };

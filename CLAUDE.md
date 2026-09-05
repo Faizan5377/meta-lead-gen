@@ -137,7 +137,13 @@ Two guards exist because both failures were observed live, and both have regress
 
 `NAME` is case-sensitive by design. **Never add the `i` flag to a pattern that embeds it** — it makes the leading `[A-Z]` case-insensitive and the match runs on into trailing lowercase words ("Michael Chen in 2011"). Only a single-letter initial may carry a period, otherwise a name fuses across sentence boundaries ("Ernest Kim. Zach Gordon").
 
-Owner-operated practices rarely print "Owner", so `Dr. <Name>` is recognised and scored much higher when the business carries that surname ("Millsaps Dentistry" → "Dr. Joshua Millsaps").
+Owner-operated practices rarely print "Owner", so `Dr. <Name>` is recognised and scored much higher when the business carries that surname ("Millsaps Dentistry" → "Dr. Joshua Millsaps"). Directories also use a surname-first form ("Knight, David James, DDS") which needs a credential suffix to parse.
+
+`ownerFromBusinessName` runs **before** Hunter and search: many advertisers name their owner in the page name ("Dr. Josh Parker Orthodontist"), which is free and instant. It requires a `Dr.` prefix or a credential, otherwise "Willo Cleans" reads as a person. It deliberately does *not* call `isPlausibleName`, which rejects names overlapping the business name — exactly the case being handled.
+
+Junk tokens are **trimmed, not rejected**: "Seth Senestraro Above" recovers as "Seth Senestraro" rather than being discarded, since the owner is real and only the layout word is noise. Rejecting the whole candidate loses real leads.
+
+Directory pages (Yelp, YellowPages, Glassdoor) list many businesses, so they never get page-level context — only same-sentence evidence counts there. That's `DIRECTORY_RE` in searchOwner.js, and it exists because a live Glassdoor result put "CEO Jennifer DeCubellis" beside "Knight Pediatric Dentistry".
 
 ### Search: SERP APIs first, scraping as fallback
 

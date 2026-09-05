@@ -102,11 +102,18 @@ export async function ownerFromWebsite(page, website, businessName, deadline) {
   const best = bestCandidate(all);
   if (!best) return null;
 
-  const label = (best.sources[0] || '').replace(/^https?:\/\/[^/]+/, '') || '/';
+  // sources[0] is either a full URL (from readCandidates) or the literal
+  // 'website:home' (from the homepage pass) — don't prefix the latter twice.
+  const raw = best.sources[0] || '';
+  const label = raw.startsWith('website:')
+    ? raw.slice('website:'.length)
+    : ((raw.replace(/^https?:\/\/[^/]+/, '') || '/') === '/'
+        ? 'home'
+        : raw.replace(/^https?:\/\/[^/]+\//, '').slice(0, 40));
   return {
     name: best.name,
     title: best.title,
-    source: `website:${label === '/' ? 'home' : label.replace(/^\//, '').slice(0, 40)}`,
+    source: `website:${label || 'home'}`,
     // The company's own site is stronger evidence than a search snippet — it is
     // unambiguously about THIS business — so it counts as corroborated.
     confidence: scoreToConfidence(best.score, { sources: 2 }),

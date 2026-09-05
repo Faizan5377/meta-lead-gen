@@ -51,6 +51,23 @@ const QUERIES = [
 // Stop as soon as a candidate is this strong — saves page loads on easy wins.
 const GOOD_ENOUGH_SCORE = 30;
 
+// Pages that list MANY businesses at once. A person named on one of these is
+// usually attached to a neighbouring listing, not to our business, so they
+// never get the benefit of page-level context — only same-sentence evidence
+// counts. Observed live: a Glassdoor page put "CEO Jennifer DeCubellis" beside
+// "Knight Pediatric Dentistry", and a Yelp page put "founded by Dr. Freeman
+// Rosenblum" beside it too. Neither runs that practice.
+const DIRECTORY_RE = /(yelp|yellowpages|superpages|glassdoor|indeed|thumbtack|angi|angieslist|bbb\.org|manta|chamberofcommerce|zocdoc|healthgrades|birdeye|nextdoor|tripadvisor|foursquare|mapquest|citysearch|dexknows|local\.com|crunchbase|zoominfo|apollo\.io|rocketreach|signalhire|leadiq)\./i;
+
+// Is this result page plausibly ABOUT our business, rather than merely
+// mentioning it? If the title names the business and it isn't a directory, the
+// whole result is on-topic and the person in the snippet can be trusted without
+// needing to share a sentence with the business name.
+function pageIsAboutBusiness({ url, title }, tokens) {
+  if (DIRECTORY_RE.test(url || '')) return false;
+  return mentionsBusiness(title || '', tokens);
+}
+
 // Pull structured results out of whatever engine rendered. Anchor text plus the
 // surrounding snippet is far cleaner than the whole page's innerText.
 function extractResults() {
@@ -134,7 +151,10 @@ async function runQuery(page, engine, query, businessName) {
 
   // 2. Result titles + snippets, which are cleaner than raw page text.
   for (const r of results.slice(0, 20)) {
-    for (const c of harvestCandidates(`${r.title}. ${r.snippet}`, businessName, 2, { requireAssociation: true })) {
+    const onTopic = pageIsAboutBusiness({ url: r.href, title: r.title }, tokens);
+    for (const c of harvestCandidates(
+      `${r.title}. ${r.snippet}`, businessName, onTopic ? 3 : 2, { requireAssociation: !onTopic },
+    )) {
       candidates.push({ ...c, source: engine.name });
     }
   }
@@ -165,7 +185,13 @@ function candidatesFromSerp({ provider, results, answer }, businessName) {
   for (const r of results || []) {
     const hit = fromLinkedInResult(r, businessName, tokens);
     if (hit) out.push({ ...hit, source: `linkedin:${provider}` });
-    for (const c of harvestCandidates(`${r.title}. ${r.snippet}`, businessName, 2, { requireAssociation: true })) {
+
+    // A page about our business vouches for its whole snippet; anything else
+    // must name the business in the same sentence as the person.
+    const onTopic = pageIsAboutBusiness(r, tokens);
+    for (const c of harvestCandidates(
+      `${r.title}. ${r.snippet}`, businessName, onTopic ? 3 : 2, { requireAssociation: !onTopic },
+    )) {
       out.push({ ...c, source: provider });
     }
   }
