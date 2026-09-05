@@ -64,6 +64,13 @@ class RunStore {
       return grew ? { status: 'updated', business: existing } : { status: 'skipped' };
     }
 
+    // Hard ceiling. The engine also stops mid-buffer at the target, but this is
+    // the invariant that guarantees it: a run NEVER returns more businesses than
+    // were asked for. Fewer only if the Ad Library genuinely runs out.
+    // Note this guards new businesses only — updates to ones already kept (an
+    // extra keyword, a longer-running ad) must still be applied above.
+    if (run.businesses.length >= run.target) return { status: 'skipped', atTarget: true };
+
     const business = { ...rec, business_key: key, keywords: rec.keyword ? [rec.keyword] : [] };
     run.businesses.push(business);
     run.businessByPage.set(key, business);

@@ -46,6 +46,22 @@ export const config = {
   // Search-engine owner fallback, used when Hunter has no answer.
   ownerSearchEnabled: bool(process.env.OWNER_SEARCH_ENABLED, true),
 
+  // Whether to fall back to SCRAPING search engines after the SERP APIs come up
+  // empty. Scraping is free but fragile (CAPTCHAs, IP throttling); turn it off
+  // to rely on the APIs alone.
+  ownerScrapeFallback: bool(process.env.OWNER_SCRAPE_FALLBACK, true),
+
+  // SERP APIs — the reliable path for owner search. All optional: with no keys
+  // set, owner search falls back to scraping and nothing else changes.
+  serp: {
+    enabled: bool(process.env.SERP_ENABLED, true),
+    serperKey: process.env.SERPER_API_KEY || '',
+    tavilyKey: process.env.TAVILY_API_KEY || '',
+    // Safety cap per provider per calendar month, counted in SQLite so it
+    // survives restarts. Keeps a free tier from silently becoming a bill.
+    maxPerMonth: num(process.env.SERP_MAX_PER_MONTH, 1000),
+  },
+
   // Hunter.io — the primary owner/decision-maker source.
   //
   // Credits are metered per month and a harvest can surface thousands of

@@ -15,7 +15,7 @@ The moment you press **Start**, four phases run automatically, in sequence:
 3. **Facebook contacts** — visits each business's Facebook page and scrapes email, phone, and website.
 4. **Owner lookup** — finds the owner / founder / decision maker, cheapest and most reliable source first:
    1. **Hunter.io** — the primary source. Resolves the business to a *domain* and returns the decision maker's name, role, email, and LinkedIn. Because it is credit-metered, every paid call is gated behind two free ones (see [Hunter.io](#hunterio-owner-enrichment) below).
-   2. **Search engines** — Startpage (Google's index), Ecosia (Bing's), Brave, DuckDuckGo's no-JS endpoint and Mojeek. Google and Bing block headless browsers outright, so we reach the same indexes through front-ends that answer a plain request. LinkedIn profile titles ("Jane Doe – Founder – Acme | LinkedIn") are parsed structurally, as they're machine-generated and highly reliable.
+   2. **Search** — a **SERP API** first (Serper → Google's index, or Tavily), falling back to *scraping* Startpage (Google's index), Ecosia (Bing's), Brave, DuckDuckGo's no-JS endpoint and Mojeek. Google and Bing block headless browsers outright, so the scraped path reaches those indexes through front-ends that answer a plain request. A provider's direct answer ("X was founded by Y") and LinkedIn profile titles ("Jane Doe – Founder – Acme | LinkedIn") are parsed structurally, as both are machine-generated and highly reliable.
    3. **The company's own website** — the About / Team page, discovered from the site's real navigation rather than a fixed list of guessed paths.
 
    Owner-operated professional practices (dentists, clinics, law firms) rarely print the word "Owner", so the extractor also recognises **"Dr. Joshua Millsaps"** and scores it much higher when the business carries that surname ("Millsaps Dentistry") — an unambiguous ownership signal.
@@ -87,7 +87,7 @@ Open **http://localhost:5173**. The scraper runs **headless** — no browser win
 
 1. **Add one or more keywords** (e.g. `real estate`, `dentist`, `fitness coaching`) and **pick one or more countries**. These two fields are all you need to start. Type a keyword and press **Enter** (or comma / semicolon) to turn it into a chip — add as many as you want, or paste a comma-separated list to add them all at once. Every keyword is searched separately against every country, and the results are merged into one de-duplicated list.
 2. **(Optional) refine with filters** — click **Filters** to expand ad category, active status, media type, platforms, languages, and a start-date range. Hover any **ⓘ** to see what a filter does.
-3. **Set a target** — the total number of unique businesses to collect across all your keywords (default 5,000). The harvester stops early only if the Ad Library genuinely runs out of matching ads.
+3. **Set a target** — the total number of unique businesses to collect across all your keywords (default 5,000). This is a **hard ceiling**: a run returns *exactly* that many businesses, never more. It returns fewer only when the Ad Library genuinely runs out of matching ads. (Meta's feed arrives a page at a time, so the harvester stops mid-page once the target is hit rather than finishing the page.)
 4. **Press “Start scraping.”** The dashboard comes alive:
    - **Metric cards** at the top count businesses, followers, owners found, and email/phone/website — with rolling animated numbers that stay exactly in sync with the table.
    - A **Harvest → Contacts → Owners → Done** stepper shows live progress bars for each phase.
@@ -122,6 +122,30 @@ Open **http://localhost:5173**. The scraper runs **headless** — no browser win
 | `HUNTER_CACHE_DAYS` | `30` | How long a Hunter answer is reused before re-paying |
 | `DB_PATH` | `server/data/leads.db` | SQLite database location |
 | `STORAGE_STATE` | — | Optional Playwright session JSON for logged-in scraping |
+
+---
+
+## Search providers (owner lookup)
+
+Scraping search engines is the most fragile part of the pipeline — free engines serve CAPTCHAs to headless browsers and throttle by IP. A SERP API removes that entirely, so **APIs are tried first and scraping is the fallback.**
+
+Both providers are optional; with no keys set, owner search behaves exactly as before and falls back to scraping.
+
+| Provider | Index | Free tier | Env var |
+|---|---|---|---|
+| [Serper](https://serper.dev) | Google | 2,500 credits on signup, no card | `SERPER_API_KEY` |
+| [Tavily](https://tavily.com) | Agent-oriented | 1,000 credits/month, recurring | `TAVILY_API_KEY` |
+
+Providers are tried in order until one answers. Every response is **cached in SQLite for 14 days**, so repeat runs over the same businesses cost nothing, and each provider has a per-month cap (`SERP_MAX_PER_MONTH`) counted in the database so a free tier can't quietly become a bill.
+
+Because owner search only runs for businesses **Hunter couldn't resolve**, these free tiers go a long way.
+
+```bash
+npm run search:check                      # which providers are live, quota used — spends nothing
+npm run search:check -- --live "\"Acme Dental\" owner founder"
+```
+
+> Two providers that used to be obvious picks are no longer viable: Brave's Search API **dropped its free tier in Feb 2026**, and Google's Custom Search JSON API is **closed to new customers** (existing users must migrate by Jan 2027). Adding another provider means appending one entry to `PROVIDERS` in [serp.js](server/src/enrich/serp.js) — quota, caching, retries and normalisation are handled for you.
 
 ---
 
@@ -175,7 +199,8 @@ server/  (Node + Fastify + Playwright + node:sqlite, Server-Sent Events)
     enrich/
       ownerResolver.js   The owner chain: Hunter → search → website
       hunter.js          Hunter.io client: gating, budget, cache, retries
-      searchOwner.js     Multi-engine, multi-query search + LinkedIn parsing
+      serp.js            Pluggable SERP APIs: quota, caching, normalisation
+      searchOwner.js     SERP APIs then scraped engines + LinkedIn parsing
       websiteOwner.js    About/Team discovery on the company's own site
       personNames.js     Name/role extraction, validation and scoring (pure)
   scripts/

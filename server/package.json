@@ -11,7 +11,8 @@
     "start": "node --experimental-sqlite src/index.js",
     "test": "node --experimental-sqlite --test test/*.test.js",
     "hunter:check": "node --experimental-sqlite scripts/hunter-check.js",
-    "owner:check": "node --experimental-sqlite scripts/owner-check.js"
+    "owner:check": "node --experimental-sqlite scripts/owner-check.js",
+    "search:check": "node --experimental-sqlite scripts/search-check.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

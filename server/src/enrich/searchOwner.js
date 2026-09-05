@@ -21,10 +21,12 @@
 //
 // Never throws. Honors a wall-clock deadline so one business can't stall a run.
 
+import { config } from '../config.js';
 import {
   bestCandidate, businessTokens, cleanName, harvestCandidates, isPlausibleName,
   mentionsBusiness, normalizeTitle, scoreToConfidence, TITLES,
 } from './personNames.js';
+import { serp } from './serp.js';
 import { jitter } from '../scraper/humanize.js';
 
 const BLOCKED_RE =
@@ -145,13 +147,80 @@ async function runQuery(page, engine, query, businessName) {
   return { blocked: false, candidates };
 }
 
-// Look up the owner of one business across engines and query shapes.
+// Turn one SERP-API response into scored candidates, using the same extraction
+// and association rules as the scraped path so both are ranked identically.
+function candidatesFromSerp({ provider, results, answer }, businessName) {
+  const tokens = businessTokens(businessName);
+  const out = [];
+
+  // A provider's direct answer ("Basecamp was founded by Jason Fried") is the
+  // highest-value string available — it's Google's own answer box or Tavily's
+  // synthesised answer, not a guess scraped off a page.
+  if (answer) {
+    for (const c of harvestCandidates(answer, businessName, 6, { requireAssociation: true })) {
+      out.push({ ...c, source: `${provider}:answer` });
+    }
+  }
+
+  for (const r of results || []) {
+    const hit = fromLinkedInResult(r, businessName, tokens);
+    if (hit) out.push({ ...hit, source: `linkedin:${provider}` });
+    for (const c of harvestCandidates(`${r.title}. ${r.snippet}`, businessName, 2, { requireAssociation: true })) {
+      out.push({ ...c, source: provider });
+    }
+  }
+  return out;
+}
+
+// Look up the owner of one business across providers, engines and query shapes.
 // Returns { name, title, source, confidence, sources } or null.
+//
+// Order matters: SERP APIs first (reliable JSON, no CAPTCHAs), scraped engines
+// only as a fallback when no provider is configured or all are exhausted.
 export async function searchOwner(page, { businessName, location = '', deadline, maxPageLoads = 6 }) {
   const name = String(businessName || '').trim();
   if (!name) return null;
 
   const all = [];
+
+  // ── Phase 1: SERP APIs ────────────────────────────────────────────────────
+  if (serp.available().length) {
+    for (const q of QUERIES) {
+      if (Date.now() > deadline) break;
+      const query = q.tpl.replace('%N', name).replace('%L', location || '').replace(/\s+/g, ' ').trim();
+      const res = await serp.search(query, { limit: 10 });
+      if (!res) break;                       // every provider is unavailable
+      all.push(...candidatesFromSerp(res, name));
+
+      const best = bestCandidate(all);
+      if (best && best.score >= GOOD_ENOUGH_SCORE) {
+        return {
+          name: best.name,
+          title: best.title,
+          source: best.sources[0] || res.provider,
+          sources: best.sources,
+          confidence: scoreToConfidence(best.score, { sources: best.sources.length }),
+          blocked: false,
+        };
+      }
+    }
+    // Providers answered but nothing conclusive — return what we have rather
+    // than burning scraped page loads on top of paid calls.
+    const best = bestCandidate(all);
+    if (best) {
+      return {
+        name: best.name,
+        title: best.title,
+        source: best.sources[0] || 'serp',
+        sources: best.sources,
+        confidence: scoreToConfidence(best.score, { sources: best.sources.length }),
+        blocked: false,
+      };
+    }
+    if (!config.ownerScrapeFallback) return { name: null, blocked: false };
+  }
+
+  // ── Phase 2: scraped engines (fallback) ───────────────────────────────────
   const workingEngines = [];
   let loads = 0;
   let anyEngineAnswered = false;

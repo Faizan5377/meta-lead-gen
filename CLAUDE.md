@@ -33,9 +33,13 @@ Two live diagnostics avoid needing a full harvest to test enrichment:
 ```bash
 npm run hunter:check           # Hunter account + free credit gate; spends nothing
 npm run hunter:check -- --spend acme.com
+npm run search:check           # which SERP providers are live + quota; spends nothing
+npm run search:check -- --live "\"Acme\" owner founder"
 npm run owner:check            # the whole owner chain against sample businesses
 npm run owner:check -- "Business Name" US https://site.com
 ```
+
+When testing the owner chain repeatedly, **the scraped engines will start blocking your IP** — results degrade to `blocked` and look like a code regression. They aren't. Configure a SERP API key, or wait it out.
 
 **Node version matters**: the scripts pass `--experimental-sqlite`, which Node 20 *rejects outright* (`bad option`). An `.nvmrc` pins 22. If `npm run dev` dies instantly, that's why — check `node --version` before debugging anything else.
 
@@ -135,9 +139,22 @@ Two guards exist because both failures were observed live, and both have regress
 
 Owner-operated practices rarely print "Owner", so `Dr. <Name>` is recognised and scored much higher when the business carries that surname ("Millsaps Dentistry" → "Dr. Joshua Millsaps").
 
-### Search engines: reaching Google without Google
+### Search: SERP APIs first, scraping as fallback
 
-Google, Bing and DuckDuckGo's JS app all serve a consent wall or CAPTCHA to a headless browser. [searchOwner.js](server/src/enrich/searchOwner.js) reaches the same indexes through front-ends that answer a plain request: **Startpage → Google's index**, **Ecosia → Bing's**, plus Brave, DuckDuckGo's no-JS `html.` endpoint and Mojeek. LinkedIn result titles are machine-generated and parsed structurally. When extracting result snippets, only accept a *small* enclosing block — a bare `div` ancestor can be most of the page, letting one result's text vouch for another's link.
+[searchOwner.js](server/src/enrich/searchOwner.js) runs two phases. **Phase 1** uses the pluggable SERP APIs in [serp.js](server/src/enrich/serp.js) (Serper → Google's index, Tavily), which return JSON and never hit a CAPTCHA. **Phase 2** scrapes engines only when no provider is configured or all are exhausted: Google, Bing and DuckDuckGo's JS app all wall a headless browser, so the scraped path reaches those indexes via **Startpage → Google** and **Ecosia → Bing**, plus Brave, DuckDuckGo's no-JS `html.` endpoint and Mojeek.
+
+Adding a provider = one entry in `PROVIDERS` with a `request()` returning `{results: [{title, url, snippet}], answer?}`; quota, caching, retries and normalisation are handled by the registry. Responses cache in `api_cache` for 14 days and each provider has a monthly cap counted in SQLite, so a free tier can't silently become a bill. **Both providers are optional** — with no keys the module reports unavailable and behaviour is unchanged.
+
+A provider's `answer` (Google's answer box, Tavily's synthesised answer) is the highest-value string available and is weighted accordingly. LinkedIn result titles are machine-generated and parsed structurally. When scraping snippets, only accept a *small* enclosing block — a bare `div` ancestor can be most of the page, letting one result's text vouch for another's link.
+
+### The run target is a hard ceiling
+
+Two independent guards, because this was a real bug (asking for 3 returned 15):
+
+1. `drain()` in [engine.js](server/src/scraper/engine.js) re-checks `shouldStop` **after every record**, stopping mid-buffer. Meta's feed arrives a page at a time, so draining a whole page before re-checking is what overshot.
+2. `store.considerAd` refuses to add a *new* business once `run.businesses.length >= run.target` and returns `{status:'skipped', atTarget:true}`.
+
+Guard 2 deliberately allows **updates** to businesses already kept (an extra keyword, a longer-running ad) — only new additions are capped. Covered by [test/store.test.js](server/test/store.test.js).
 
 - Naming drift: the `GOOGLE_ENRICH` env var is the legacy name for `OWNER_ENRICH` and is still honoured. The `google_status` column was renamed `owner_status`; old databases keep the dead column harmlessly.
 

@@ -178,28 +178,34 @@ async function harvestCountry({ filters, country, keyword, rawSeen, onAd: rawOnA
         && stableScrolls < config.stableScrollsToStop
         && Date.now() - runStart < config.maxRunMs) {
 
-      let added = drain(buffer, rawSeen, onAd);
-      if (added === 0) {
+      let added = drain(buffer, rawSeen, onAd, shouldStop);
+      if (added === 0 && !shouldStop?.()) {
         // Give Meta time to back-fill before declaring the feed exhausted.
         await jitter(config.noNewAdsGraceMs, config.noNewAdsGraceMs + 800);
-        added = drain(buffer, rawSeen, onAd);
+        added = drain(buffer, rawSeen, onAd, shouldStop);
       }
+      if (shouldStop?.()) break;
       stableScrolls = added === 0 ? stableScrolls + 1 : 0;
       onProgress?.({ country, keyword, rawSeen: rawSeen.size, phase: 'harvesting' });
 
       await humanScroll(page, 1600);
       await jitter(config.scrollSettleMs, config.scrollSettleMs + 900);
     }
-    drain(buffer, rawSeen, onAd); // final drain
+    drain(buffer, rawSeen, onAd, shouldStop); // final drain, still capped
   } finally {
     page.off('response', listener);
     try { await page.close(); } catch {}
   }
 }
 
-function drain(buffer, rawSeen, onAd) {
+// Hand buffered ads to the orchestrator one at a time, re-checking `shouldStop`
+// after EVERY record. Meta's feed arrives a page at a time, so draining a whole
+// buffer before re-checking is what used to overshoot the target (asking for 3
+// could yield 15). The target is a hard ceiling: we stop mid-buffer.
+function drain(buffer, rawSeen, onAd, shouldStop) {
   let added = 0;
   while (buffer.length) {
+    if (shouldStop?.()) break;
     const rec = buffer.shift();
     if (!rec?.library_id || rawSeen.has(rec.library_id)) continue;
     rawSeen.add(rec.library_id);
