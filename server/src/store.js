@@ -3,7 +3,7 @@
 // SQLite is handled by the orchestrator via db.js.
 
 import { randomUUID } from 'node:crypto';
-import { db } from './db.js';
+import { library } from './library.js';
 
 class RunStore {
   constructor() { this.runs = new Map(); }
@@ -13,14 +13,21 @@ class RunStore {
     const run = {
       id,
       createdAt: new Date().toISOString(),
+      name: null,
+      seq: null,
       status: 'idle',            // idle | running | finished | stopped | error
-      phase: 'idle',             // idle | harvesting | contacts | owners | done
+      phase: 'idle',             // idle | harvesting | enriching | saving | done
       filters,
       target: filters.target,
       businesses: [],            // kept businesses (this run), insertion order
       businessByPage: new Map(), // dedup key -> business
-      counts: { rawSeen: 0, kept: 0, contactsDone: 0, ownersDone: 0, skippedKnown: 0 },
-      hunter: null,              // live Hunter credit state, for the UI
+      counts: {
+        rawSeen: 0,            // unique ads pulled off the feed
+        kept: 0,               // businesses kept (== businesses.length)
+        skippedKnown: 0,       // already in the shared library
+        skippedIrrelevant: 0,  // failed the niche relevance gate
+        enrichedDone: 0,       // advertiser-detail enrichment progress
+      },
       cancelRequested: false,
       startedAt: null,
       finishedAt: null,
@@ -35,21 +42,36 @@ class RunStore {
 
   // Decide what to do with one freshly-harvested ad. Returns
   // { status: 'added'|'updated'|'skipped', business? }.
-  considerAd(run, rec) {
+  //
+  // `relevance` is the run's niche gate; ads that fail it never enter the run.
+  considerAd(run, rec, relevance) {
     run.counts.rawSeen++;
     const key = businessKey(rec);
     if (!key) return { status: 'skipped' };
 
     // Check THIS run first: the same business often resurfaces under another
-    // keyword or country, and we want to record that extra keyword. (The DB
-    // check below would otherwise swallow it, because businesses added during
-    // this run are already persisted.)
+    // keyword or country, and we want to record that extra keyword. (The
+    // library check below would otherwise swallow it, because businesses added
+    // during this run are already marked as known.)
     const existing = run.businessByPage.get(key);
 
     // Captured in a PREVIOUS run → don't surface again.
-    if (!existing && (db.hasBusiness(key) || db.hasSeenAd(rec.library_id))) {
+    if (!existing && (library.hasBusiness(key) || library.hasSeenAd(rec.library_id))) {
       run.counts.skippedKnown++;
-      return { status: 'skipped' };
+      return { status: 'skipped', known: true };
+    }
+
+    // Niche gate. Meta's keyword search is loose, so an ad that isn't actually
+    // in the searched niche is dropped before it can take a slot against the
+    // target — otherwise "plumbing" spends slots on cholesterol supplements.
+    if (!existing && relevance) {
+      const verdict = relevance.evaluate(rec);
+      rec.relevance_score = verdict.score;
+      rec.relevance_reason = verdict.reason;
+      if (verdict.decision === 'drop') {
+        run.counts.skippedIrrelevant++;
+        return { status: 'skipped', irrelevant: true, verdict };
+      }
     }
 
     if (existing) {
@@ -88,13 +110,14 @@ class RunStore {
   snapshot(run) {
     return {
       id: run.id,
+      name: run.name || null,
+      seq: run.seq || null,
       createdAt: run.createdAt,
       status: run.status,
       phase: run.phase,
       filters: run.filters,
       target: run.target,
       counts: run.counts,
-      hunter: run.hunter,
       businesses: run.businesses,
       errors: run.errors.slice(-100),
       startedAt: run.startedAt,
@@ -155,19 +178,19 @@ function mergeKeptAd(existing, rec) {
   // Copy ad/creative fields from the better ad; keep enrichment fields and the
   // accumulated keyword list intact.
   const keep = {
-    contact_email: existing.contact_email, contact_phone: existing.contact_phone,
-    contact_website: existing.contact_website, contact_status: existing.contact_status,
-    email_source: existing.email_source,
-    owner_name: existing.owner_name, owner_title: existing.owner_title,
-    owner_email: existing.owner_email, owner_linkedin: existing.owner_linkedin,
-    owner_phone: existing.owner_phone, owner_confidence: existing.owner_confidence,
-    owner_source: existing.owner_source, owner_status: existing.owner_status,
-    company_domain: existing.company_domain,
-    company_domain_source: existing.company_domain_source,
+    followers_instagram: existing.followers_instagram,
+    instagram_handle: existing.instagram_handle,
+    relevance_score: existing.relevance_score,
+    relevance_reason: existing.relevance_reason,
     business_key: existing.business_key, keywords: existing.keywords,
     keyword: existing.keyword || rec.keyword,
   };
-  Object.assign(existing, rec, keep);
+  // An advertiser can run several ads; keep the highest count we've seen rather
+  // than whatever the displacing creative happens to report.
+  const ads = Math.max(Number(existing.ads_running) || 0, Number(rec.ads_running) || 0);
+  // Platforms accumulate across the advertiser's ads.
+  const platforms = Array.from(new Set([...(existing.platforms || []), ...(rec.platforms || [])]));
+  Object.assign(existing, rec, keep, { ads_running: ads, platforms });
 }
 
 export const store = new RunStore();

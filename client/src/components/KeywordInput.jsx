@@ -5,7 +5,7 @@ import { useRef, useState } from 'react';
 // on Meta (a combined "a, b, c" string would be treated as one literal phrase
 // and match nothing). Add with Enter, comma, semicolon, or Tab; paste a list to
 // add them all at once; Backspace on an empty field removes the last chip.
-export default function KeywordInput({ value = [], onChange, max = 50 }) {
+export default function KeywordInput({ value = [], onChange, max = 50, disabled = false, placeholder }) {
   const [draft, setDraft] = useState('');
   const inputRef = useRef(null);
 

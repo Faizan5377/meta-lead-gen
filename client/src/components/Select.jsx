@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 // Single-select dropdown in our own style (matches MultiSelect), so no native
 // OS dropdowns appear anywhere. `options` = [{ value, label, disabled? }].
-export default function Select({ options, value, onChange, placeholder = 'Select…' }) {
+export default function Select({ options, value, onChange, placeholder = 'Select…', disabled = false }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 

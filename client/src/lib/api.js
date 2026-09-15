@@ -11,14 +11,34 @@ async function req(path, opts = {}) {
   return res.json();
 }
 
+// Drop empty values so the URL only carries filters that are actually set.
+export function toQuery(params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '' ) continue;
+    if (Array.isArray(v)) { if (v.length) qs.set(k, v.join(',')); continue; }
+    qs.set(k, String(v));
+  }
+  return qs.toString();
+}
+
 export const api = {
   health: () => req('/api/health'),
   filters: () => req('/api/filters'),
-  dbStats: () => req('/api/db/stats'),
-  clearDb: () => req('/api/db/clear', { method: 'POST' }),
+
+  // Runs
   createRun: (filters) => req('/api/runs', { method: 'POST', body: JSON.stringify(filters) }),
   startRun: (id) => req(`/api/runs/${id}/start`, { method: 'POST' }),
   stopRun: (id) => req(`/api/runs/${id}/stop`, { method: 'POST' }),
   getRun: (id) => req(`/api/runs/${id}`),
-  exportUrl: (id) => `/api/runs/${id}/export`,
+  runExportUrl: (id) => `/api/runs/${id}/export`,
+
+  // Library — organised by execution
+  libraryStats: () => req('/api/library/stats'),
+  libraryRuns: (search) => req(`/api/library/runs?${toQuery({ search })}`),
+  runAds: (id) => req(`/api/library/runs/${id}/ads`),
+  renameRun: (id, name) => req(`/api/library/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  deleteRun: (id) => req(`/api/library/runs/${id}`, { method: 'DELETE' }),
+  runExportUrlLibrary: (id) => `/api/library/runs/${id}/export`,
+  clearLibrary: () => req('/api/library/clear', { method: 'POST' }),
 };

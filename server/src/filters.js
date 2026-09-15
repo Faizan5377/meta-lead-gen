@@ -1,3 +1,5 @@
+import { config } from './config.js';
+
 // Canonical definitions of every filter the Meta Ad Library exposes, mirrored
 // so the app can reproduce any search. The client renders these; urlBuilder.js
 // turns a chosen set into a real Ad Library URL.
@@ -120,11 +122,16 @@ export const MATCH_TYPES = [
 ];
 
 // ── Sort ─────────────────────────────────────────────────────────────────────
+// Meta offers exactly these two and nothing else.
 export const SORTS = [
-  { value: 'relevance', label: 'Most relevant' },
-  { value: 'newest', label: 'Newest first' },
-  { value: 'oldest', label: 'Oldest first' },
+  { value: 'impressions', label: 'Impressions: high to low' },
+  { value: 'recent', label: 'Most recent' },
 ];
+
+// ── Media type ───────────────────────────────────────────────────────────────
+// Meta greys out media type for the political/issues category, where it does
+// not apply.
+export const MEDIA_TYPE_UNAVAILABLE_FOR = ['political_and_issue_ads'];
 
 // Short help text per filter (shown in the UI's "i" tooltips). Mirrors what each
 // Meta Ad Library filter actually does.
@@ -156,7 +163,16 @@ export const FILTER_META = {
   matchTypes: MATCH_TYPES,
   sorts: SORTS,
   help: FILTER_HELP,
-  defaultTarget: 5000,
+  defaultTarget: 100,
+  maxTarget: config.maxTarget,
+  // Tells the client which options to disable, and why, so the UI mirrors
+  // Meta's own conditional behaviour instead of hardcoding rules twice.
+  conditional: {
+    adCategoryRestrictedTo: Object.fromEntries(
+      AD_CATEGORIES.filter((c) => c.restrictedTo).map((c) => [c.value, c.restrictedTo]),
+    ),
+    mediaTypeUnavailableFor: MEDIA_TYPE_UNAVAILABLE_FOR,
+  },
 };
 
 // Coerce an arbitrary request body into a validated, canonical filter object.
@@ -194,20 +210,42 @@ export function normalizeFilters(body = {}) {
     .map(String).filter(l => LANGUAGE_VALUES.has(l));
 
   const matchType = MATCH_TYPES.find(m => m.value === body.matchType)?.value || 'keyword_unordered';
-  const sort = SORTS.find(s => s.value === body.sort)?.value || 'relevance';
+  const sort = SORTS.find(s => s.value === body.sort)?.value || 'impressions';
 
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
   const startDateMin = dateRe.test(body.startDateMin || '') ? body.startDateMin : null;
   const startDateMax = dateRe.test(body.startDateMax || '') ? body.startDateMax : null;
+  if (startDateMin && startDateMax && startDateMin > startDateMax) {
+    errors.push('The "from" date must be on or before the "to" date');
+  }
 
-  const target = Math.max(1, Math.min(20000, Number(body.target) || FILTER_META.defaultTarget));
+  // Meta only applies media type outside the political/issues category.
+  const effectiveMediaType = MEDIA_TYPE_UNAVAILABLE_FOR.includes(adType) ? 'all' : mediaType;
+
+  // Hard ceiling, so a run can never be asked for more than the app supports.
+  const target = Math.max(
+    1,
+    Math.min(config.maxTarget, Number(body.target) || FILTER_META.defaultTarget),
+  );
+
+  // Niche relevance controls. `nicheTerms` widens the niche with the user's own
+  // words — data supplied per run, never hardcoded verticals.
+  const nicheTerms = (Array.isArray(body.nicheTerms) ? body.nicheTerms : String(body.nicheTerms || '').split(','))
+    .map((t) => String(t).trim()).filter(Boolean).slice(0, 25);
+  const relevanceEnabled = body.relevanceEnabled !== false;
+  const minRelevance = Number.isFinite(Number(body.minRelevance))
+    ? Math.max(0, Math.min(100, Number(body.minRelevance)))
+    : undefined;
 
   return {
     filters: {
       keywords,
       keyword: keywords[0] || '', // convenience/display for single-keyword runs
-      countries, adType, activeStatus, mediaType,
+      countries, adType, activeStatus, mediaType: effectiveMediaType,
       platforms, languages, matchType, sort, startDateMin, startDateMax, target,
+      advertiserIds: (Array.isArray(body.advertiserIds) ? body.advertiserIds : []).map(String).slice(0, 50),
+      relevanceEnabled, nicheTerms, minRelevance,
+      deepEnrich: body.deepEnrich === true,
     },
     errors,
   };

@@ -1,62 +1,81 @@
 # Ad Library Harvester
 
-A headless tool that mines the **Meta Ad Library** and turns it into a clean, deduplicated list of **unique businesses** — each enriched with follower counts, Facebook contact details (email / phone / website), and a best-effort owner/founder lookup — streamed live into a modern dashboard and exportable as a single CSV.
+A headless tool that mines the **Meta Ad Library** and turns it into a clean, deduplicated list of **unique advertisers** — each with how long its ad has been running, how many ads it's running, the platforms it runs on, follower counts, and a direct link to open the ad in the Ad Library.
 
-It is a **general-purpose** harvester: give it any keyword and any combination of Meta's own filters, and it captures every advertiser it can find, **one row per business**. There are no niche presets or scoring modes — it works the same for real estate, dentists, ecommerce, coaches, or anything else.
+Every search is saved as an **execution** in a shared Supabase library, so running the same keyword again only ever returns advertisers you don't already have.
 
 ---
 
 ## What it does
 
-The moment you press **Start**, four phases run automatically, in sequence:
+Press **Start** and three phases run in sequence:
 
-1. **Harvest** — drives a headless Chromium over the Ad Library and intercepts Meta's internal GraphQL feed (far more robust than scraping the visible page). It captures **one unique ad per business** — the *longest continuously running* one — up to your target (default **5,000**). It keeps scrolling until the target is reached or the feed genuinely runs out of ads. It never opens a browser window.
-2. **De-dupe across searches** — every business is stored in a local SQLite database. On future searches, ads/businesses you already captured are **skipped automatically**, so you only ever see new results.
-3. **Facebook contacts** — visits each business's Facebook page and scrapes email, phone, and website.
-4. **Owner lookup** — finds the owner / founder / decision maker, cheapest and most reliable source first:
-   0. **The page name itself** — many advertisers name their owner outright ("Dr. Josh Parker Orthodontist", "Joshua M. Millsaps, DDS, PA"). Free, instant, and more reliable than anything inferred, so it's checked before spending a credit or a page load. A "Dr." prefix or a professional credential is required, so an ordinary business name like "Willo Cleans" is never mistaken for a person.
-   1. **Hunter.io** — the primary source. Resolves the business to a *domain* and returns the decision maker's name, role, email, and LinkedIn. Because it is credit-metered, every paid call is gated behind two free ones (see [Hunter.io](#hunterio-owner-enrichment) below).
-   2. **Search** — a **SERP API** first (Serper → Google's index, or Tavily), falling back to *scraping* Startpage (Google's index), Ecosia (Bing's), Brave, DuckDuckGo's no-JS endpoint and Mojeek. Google and Bing block headless browsers outright, so the scraped path reaches those indexes through front-ends that answer a plain request. A provider's direct answer ("X was founded by Y") and LinkedIn profile titles ("Jane Doe – Founder – Acme | LinkedIn") are parsed structurally, as both are machine-generated and highly reliable.
-   3. **The company's own website** — the About / Team page, discovered from the site's real navigation rather than a fixed list of guessed paths.
+1. **Harvest** — drives a headless Chromium over the Ad Library and intercepts Meta's internal GraphQL feed (far more robust than scraping the visible page). It captures **one ad per advertiser** — the longest continuously running one — and keeps scrolling until your target is reached or the feed genuinely runs out.
+2. **Advertiser details** *(optional)* — opens each advertiser's "About the advertiser" panel for the Instagram handle and follower count, which the feed doesn't carry. Off by default because it costs a page load per advertiser.
+3. **Save** — writes the execution to the shared library in one batch.
 
-   Owner-operated professional practices (dentists, clinics, law firms) rarely print the word "Owner", so the extractor also recognises **"Dr. Joshua Millsaps"** and scores it much higher when the business carries that surname ("Millsaps Dentistry") — an unambiguous ownership signal.
+### Niche relevance — the part that matters
 
-Every phase is wrapped so a failure is logged and streamed but **never crashes the run**. The **Export** button stays disabled until all four phases finish, then downloads a single CSV — UTF-8 with a BOM, CRLF line endings and human-readable headers, with every field sanitised to one line so a business is always exactly one row in Excel, Sheets or pandas.
+Meta's keyword search is loose. Searching **"plumbing"** genuinely returns a cholesterol supplement, a drain-hair gadget and washing-machine tablets alongside actual plumbers.
 
-### What you get per business
+Every harvested ad is therefore scored against your niche and the weak ones are dropped **before they use up your target**, so you still get exactly the number you asked for — all of them relevant.
 
-Followers · advertiser category · country · matched keyword(s) · active status · ad start date & days running · CTA · media format · ad copy · destination link · Facebook page link · ad-snapshot link · email · phone · website · company domain · owner name, title, **email, phone, LinkedIn, confidence** & source · library id · numeric page id.
+Two rules make this work for any niche:
 
-**Owner confidence** is deliberately conservative. Business names are not unique — there are many companies called "Basecamp" — so a name inferred from search text is capped at **65**, corroboration across independent sources at **80**, and only Hunter (which resolves through a specific domain) goes higher. A `not_found` is reported honestly rather than filled with a confident guess.
+- **Nothing about any vertical is hardcoded.** There is no list of "plumbing words". Scoring uses only your keyword, the ad's own text and destination, and **Meta's own page-category taxonomy**.
+- **The niche is learned as the run proceeds.** A broad keyword like "home services" rarely appears verbatim in a plumber's ad copy. Ads that *do* match teach the gate which page categories belong to this niche ("Plumbing Service", "Appliance Repair"), and later ads are then accepted on category alone — but only after two independent advertisers corroborate that category.
+
+You can widen the niche with your own related terms per run. That's data you supply, never code.
+
+A live sample of 30 ads for "plumbing" kept 20 genuine plumbing/HVAC businesses and dropped a cholesterol community, a jewellery brand, a book and an auto service.
+
+### What you get per advertiser
+
+Business name · **direct ad URL** · Facebook page · days running · started date · active status · **number of ads running** · **platforms** (Facebook / Instagram / Messenger / Threads / Audience Network) · **Facebook followers** · Instagram followers & handle (optional) · page categories · country · matched keyword(s) · relevance score & reason · headline · ad copy · CTA · destination URL · domain · media format · image/video URL · library id · page id.
 
 ---
 
-## Filters (mirrors the Meta Ad Library)
+## Filters
 
-The filter bar reproduces the Ad Library's own filters and their dynamic behavior:
+The filter bar reproduces the Ad Library's own filters and their conditional behaviour:
 
-- **Keywords** — add as many as you like. Each keyword is searched **separately** and the results are merged and de-duplicated, because Meta has no OR syntax (typing `dentist, plumber, spa` as one query matches nothing). Press Enter, comma or semicolon to add a chip, or paste a whole list at once.
-- **Match type** — broad (any order) or exact phrase
-- **Countries** — multi-select, or *All countries* (alphabetically ordered)
-- **Ad category** — All ads · Issues/elections/politics · Properties · Employment · Financial products. The last three are legally-restricted transparency categories that only exist in the **US & Canada**, so they are automatically greyed out for other countries — exactly as Meta does.
-- **Active status** · **Media type** · **Platforms** · **Languages** · **Ad-delivery date range**
-- **Target** — how many unique businesses to collect before stopping
+- **Keywords** — add as many as you like. Each is searched **separately** and merged, because Meta has no OR syntax (`dentist, plumber` as one query matches nothing).
+- **Countries** — multi-select, or *All countries*
+- **Ad category** — All ads · Issues/elections/politics · Properties · Employment · Financial products. The last three only exist in the **US & Canada**, so they're greyed out elsewhere, exactly as Meta does. Changing country to one where your chosen category isn't legal resets it to "All ads".
+- **Match type** · **Active status** · **Media type** · **Platforms** · **Languages** · **Impressions by date** range
+- **Sort by** — Impressions high-to-low, or Most recent (the only two Meta offers)
+- **Target** — how many advertisers to collect. **Hard ceiling of 2,500**, and a run returns *exactly* that many, never more. Fewer only when the Ad Library genuinely runs out.
 
-Every filter has an **ⓘ** marker that explains what it does on hover.
+Media type is disabled for the issues/elections/politics category, which Meta doesn't apply it to.
+
+---
+
+## The library
+
+The **Ad Library** page lists every search you've run as a collapsible **execution**, newest first. Each is auto-named so repeats are unmistakable:
+
+```
+plumbing · US · #1
+plumbing · US · #2      ← same search, later run, clearly separate
+roofing · US/CA · #1
+```
+
+Each execution shows when it ran, how many ads it collected, how many were filtered as off-niche, and how many were skipped because you already had them. Expand one to browse its ads, or export just that execution as CSV. You can rename executions, and deleting one frees its advertisers to be collected again.
 
 ---
 
 ## Quick start
 
-**Requirements:** Node.js **22.5+** (for the built-in `node:sqlite`) and macOS / Linux / WSL. An `.nvmrc` is included — run `nvm use` if you juggle versions, since Node 20 rejects the `--experimental-sqlite` flag the scripts pass.
+**Requirements:** Node.js **22.5+** and macOS / Linux / WSL. An `.nvmrc` is included — run `nvm use`, since Node 20 rejects the `--experimental-sqlite` flag the scripts pass.
 
 ```bash
 # 1. Backend
 cd server
 npm install
 npx playwright install chromium
-cp .env.example .env        # then add HUNTER_API_KEY for owner enrichment
-npm test                    # unit tests for the enrichment logic
+cp .env.example .env        # add your Supabase credentials
+npm run supabase:setup      # creates the tables
+npm test                    # unit tests for the relevance gate
 
 # 2. Frontend
 cd ../client
@@ -66,40 +85,21 @@ npm install
 Run the two services in separate terminals:
 
 ```bash
-# Terminal 1 — backend (http://127.0.0.1:8787)
-cd server && npm run dev
-
-# Terminal 2 — frontend (http://localhost:5173)
-cd client && npm run dev
+cd server && npm run dev    # http://127.0.0.1:8787
+cd client && npm run dev    # http://localhost:5173
 ```
 
-Open **http://localhost:5173**. The scraper runs **headless** — no browser window opens.
-
-> **No database setup needed.** On first launch the backend automatically creates
-> `server/data/leads.db` (folder, file, and tables) — so a fresh clone just needs
-> `npm install` then `npm run dev`. The database file is gitignored, so every user
-> starts with their own empty database. This requires **Node 22.5+** for the
-> built-in `node:sqlite`; on older Node the app still runs, just without
-> cross-session dedup (persistence is skipped, never a crash).
+The scraper runs **headless** — no browser window opens.
 
 ---
 
-## How to use it
+## Supabase
 
-1. **Add one or more keywords** (e.g. `real estate`, `dentist`, `fitness coaching`) and **pick one or more countries**. These two fields are all you need to start. Type a keyword and press **Enter** (or comma / semicolon) to turn it into a chip — add as many as you want, or paste a comma-separated list to add them all at once. Every keyword is searched separately against every country, and the results are merged into one de-duplicated list.
-2. **(Optional) refine with filters** — click **Filters** to expand ad category, active status, media type, platforms, languages, and a start-date range. Hover any **ⓘ** to see what a filter does.
-3. **Set a target** — the total number of unique businesses to collect across all your keywords (default 5,000). This is a **hard ceiling**: a run returns *exactly* that many businesses, never more. It returns fewer only when the Ad Library genuinely runs out of matching ads. (Meta's feed arrives a page at a time, so the harvester stops mid-page once the target is hit rather than finishing the page.)
-4. **Press “Start scraping.”** The dashboard comes alive:
-   - **Metric cards** at the top count businesses, followers, owners found, and email/phone/website — with rolling animated numbers that stay exactly in sync with the table.
-   - A **Harvest → Contacts → Owners → Done** stepper shows live progress bars for each phase.
-   - **Rows stream into the table** as businesses are found, then fill in with contacts and owners as enrichment completes.
-   - The **Run status** panel in the sidebar shows the current phase and how many businesses were kept vs. skipped (already in your database).
-   - The live ticker names the keyword being searched. If a keyword has no matching ads, it's reported as a quiet amber notice ("N keywords with no ads") rather than an error — the run simply moves on to the next one.
-5. **Stop any time** with the red **Stop** button — whatever has been collected is kept.
-6. **Export** — when every phase finishes, the green **Export CSV** button activates. One click downloads every business from the run, with all its data, as a single UTF-8 CSV. Reloading the page mid-run is safe: the last run is restored automatically, so you never lose access to the export.
-7. **Start fresh whenever you like** — the **trash icon** next to the “N in DB” badge clears the local database (with a confirmation) so previously-found businesses are no longer skipped.
+Supabase is the shared library: every run reads it to skip advertisers you already have, and writes new ones back. That's what makes repeat searches return only new results, across machines rather than just one laptop.
 
-> **Tip:** because businesses are deduplicated against the database, you can run the same keyword repeatedly over time and only ever get *new* advertisers each run.
+Storage is tiny — roughly 2–3 KB per ad, so the 500 MB free tier holds well over 100,000 ads. No files are stored; image and video fields are URLs only (the scraper blocks media downloads, which is what keeps it fast).
+
+If Supabase is unreachable — no credentials, project paused, network down — the app **keeps working against the local SQLite library** instead of failing the run, and the UI says which store is live.
 
 ---
 
@@ -109,135 +109,80 @@ Open **http://localhost:5173**. The scraper runs **headless** — no browser win
 |---|---|---|
 | `PORT` | `8787` | Backend port |
 | `HEADFUL` | `false` | Set `true` to watch the browser (debugging only) |
-| `TARGET_ADS` | `5000` | Default harvest target (the UI overrides this per search) |
-| `MAX_RUN_MS` | `5400000` | Safety ceiling for a whole harvest, all keywords (90 min) |
+| `MAX_TARGET` | `2500` | Hard ceiling on ads per run |
+| `MAX_RUN_MS` | `5400000` | Safety ceiling for a whole harvest (90 min) |
 | `STABLE_SCROLLS_TO_STOP` | `5` | Stop after N scrolls that surface no new ads |
 | `SCROLL_SETTLE_MS` | `2200` | Pause after each scroll so the next feed page loads |
-| `ENRICH_CONCURRENCY` | `3` | Parallel pages for contact / owner enrichment |
-| `OWNER_ENRICH` | `true` | Toggle the automatic owner-lookup phase (`GOOGLE_ENRICH` still works) |
-| `OWNER_SEARCH_ENABLED` | `true` | Toggle the search-engine fallback |
-| `HUNTER_API_KEY` | — | Hunter.io key. Without it, owners come from search + website only |
-| `HUNTER_ENABLED` | `true` | Master switch for Hunter |
-| `HUNTER_MAX_CREDITS_PER_RUN` | `100` | Hard cap on paid Hunter calls in one run |
-| `HUNTER_MIN_CREDITS_RESERVE` | `10` | Never spend below this balance |
-| `HUNTER_CACHE_DAYS` | `30` | How long a Hunter answer is reused before re-paying |
-| `DB_PATH` | `server/data/leads.db` | SQLite database location |
-| `STORAGE_STATE` | — | Optional Playwright session JSON for logged-in scraping |
-
----
-
-## Search providers (owner lookup)
-
-Scraping search engines is the most fragile part of the pipeline — free engines serve CAPTCHAs to headless browsers and throttle by IP. A SERP API removes that entirely, so **APIs are tried first and scraping is the fallback.**
-
-Both providers are optional; with no keys set, owner search behaves exactly as before and falls back to scraping.
-
-| Provider | Index | Free tier | Env var |
-|---|---|---|---|
-| [Serper](https://serper.dev) | Google | 2,500 credits on signup, no card | `SERPER_API_KEY` |
-| [Tavily](https://tavily.com) | Agent-oriented | 1,000 credits/month, recurring | `TAVILY_API_KEY` |
-
-Providers are tried in order until one answers. Every response is **cached in SQLite for 14 days**, so repeat runs over the same businesses cost nothing, and each provider has a per-month cap (`SERP_MAX_PER_MONTH`) counted in the database so a free tier can't quietly become a bill.
-
-Because owner search only runs for businesses **Hunter couldn't resolve**, these free tiers go a long way.
-
-```bash
-npm run search:check                      # which providers are live, quota used — spends nothing
-npm run search:check -- --live "\"Acme Dental\" owner founder"
-```
-
-> Two providers that used to be obvious picks are no longer viable: Brave's Search API **dropped its free tier in Feb 2026**, and Google's Custom Search JSON API is **closed to new customers** (existing users must migrate by Jan 2027). Adding another provider means appending one entry to `PROVIDERS` in [serp.js](server/src/enrich/serp.js) — quota, caching, retries and normalisation are handled for you.
-
----
-
-## Hunter.io owner enrichment
-
-Hunter is the most accurate owner source, but its credits are metered monthly while a single harvest can surface thousands of businesses. So **paid calls are gated behind free ones**, and most businesses cost nothing:
-
-| Step | Endpoint | Cost | Purpose |
-|---|---|---|---|
-| 1 | `domain-finder` | **free** | Business name → domain, when Facebook listed no website |
-| 2 | `email-count` | **free** | Does Hunter know any *executive* at this domain? |
-| 3 | `domain-search` | 1 credit | Only if step 2 said yes — returns the decision maker |
-
-On top of that gate there are three more guards: a per-run cap (`HUNTER_MAX_CREDITS_PER_RUN`), a balance floor (`HUNTER_MIN_CREDITS_RESERVE`), and a **persistent cache** in SQLite so the same domain is never paid for twice — across runs and restarts. Clearing the leads database deliberately keeps that cache, since those rows cost real credits.
-
-Domain matching is strict on purpose: a wrong domain yields a wrong owner, which is worse than none. A candidate domain is only accepted if its slug matches the business name, preferring the country TLD for a local business.
-
-The credit balance is read live at the start of every run and shown in the dashboard. If Hunter is unavailable for any reason — no key, a rejected key, exhausted credits, or an account restriction — the run **degrades to search + website lookup instead of failing**, and the UI says which.
-
-Verify the integration without running a harvest:
-
-```bash
-cd server
-npm run hunter:check              # account, credits, and the free gate — spends nothing
-npm run hunter:check -- --spend acme.com   # allow the one paid call, end to end
-npm run owner:check               # the full owner chain on sample businesses
-npm run owner:check -- "Some Business" US https://theirsite.com
-```
+| `ENRICH_CONCURRENCY` | `3` | Parallel pages for advertiser-detail enrichment |
+| `RELEVANCE_ENABLED` | `true` | The niche gate |
+| `RELEVANCE_MIN_SCORE` | `40` | Score an ad must reach to be kept |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | — | Shared library |
+| `SUPABASE_DB_PASSWORD` | — | Only needed by `supabase:setup` (DDL) |
+| `DB_PATH` | `server/data/leads.db` | Local fallback library |
+| `STORAGE_STATE` | — | Optional Playwright session JSON |
 
 ---
 
 ## Architecture
 
 ```
-server/  (Node + Fastify + Playwright + node:sqlite, Server-Sent Events)
+server/  (Node + Fastify + Playwright + Supabase, Server-Sent Events)
   src/
     index.js             REST + SSE endpoints
     config.js            .env loader
-    filters.js           Full Meta filter definitions, help text + validation
+    filters.js           Meta filter definitions, help text + validation
     urlBuilder.js        Ad Library search-URL builder
-    db.js                SQLite: seen_ads + businesses + api_cache
-    store.js             Run state + "one longest-running ad per business"
-    orchestrator.js      Harvest → contacts → owners pipeline (auto, resilient)
-    exporter.js          Single CSV export
+    relevance.js         Niche gate — scoring + per-run category learning
+    library.js           Shared library: Supabase, with SQLite fallback
+    db.js                Local SQLite mirror
+    store.js             Run state + "one longest-running ad per advertiser"
+    orchestrator.js      Harvest → enrich → save pipeline
+    exporter.js          CSV export (per run, or per execution)
     scraper/
       engine.js          Headless GraphQL-feed harvester
       feedParser.js      GraphQL node → normalized ad record
-      contactScraper.js  Facebook page → email / phone / website
-      parsers.js         followers / dates / link-decode helpers
+      advertiserScraper.js  "About the advertiser" → Instagram followers
+      parsers.js         dates / link-decode helpers
       humanize.js        jittered delays + human-like scrolling
-    enrich/
-      ownerResolver.js   The owner chain: Hunter → search → website
-      hunter.js          Hunter.io client: gating, budget, cache, retries
-      serp.js            Pluggable SERP APIs: quota, caching, normalisation
-      searchOwner.js     SERP APIs then scraped engines + LinkedIn parsing
-      websiteOwner.js    About/Team discovery on the company's own site
-      personNames.js     Name/role extraction, validation and scoring (pure)
-  scripts/
-    hunter-check.js      Live Hunter diagnostic
-    owner-check.js       Live owner-chain diagnostic
-  test/
-    enrich.test.js       Unit tests for the pure enrichment logic
+  sql/schema.sql         Supabase tables + indexes
+  scripts/               supabase-setup · relevance-check · probe-feed
+  test/                  relevance gate unit tests
 
-client/  (Vite + React + Tailwind + Radix + lucide-react)
+client/  (Vite + React + Tailwind)
   src/
-    App.jsx              Sidebar + dashboard layout
+    App.jsx              Shell + navigation
+    pages/               ScraperPage · LibraryPage (executions)
     lib/                 api client, SSE reducer, formatters
-    components/          FilterPanel, Select, MultiSelect, InfoTip,
-                         MetricsBar, AnimatedNumber (odometer), ProgressPanel,
-                         ResultsTable, ExportButton, ClearDbButton
+    components/          FilterPanel, ResultsTable, MetricsBar, ProgressPanel…
 ```
 
-**Data flow:** the UI creates a run → subscribes to its SSE stream → the orchestrator drives the headless browser through harvest + enrichment, persisting to SQLite and fanning typed events out → metrics and rows update live, and the single CSV export unlocks once everything is done. Metrics are derived from the live business array, so the on-screen numbers always equal the table rows.
-
-**API endpoints**
+**API**
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/filters` | All Meta filter definitions + help text |
-| `GET /api/db/stats` · `POST /api/db/clear` | Database size · wipe it |
-| `POST /api/runs` | Create a run from a filter set |
-| `POST /api/runs/:id/start` · `/stop` | Begin / cancel the pipeline |
-| `GET /api/runs/:id` | Snapshot (for refresh / late subscribers) |
-| `GET /api/runs/:id/events` | Live SSE stream |
-| `GET /api/runs/:id/export` | Single CSV (only after the run is done) |
+| `GET /api/filters` | Filter definitions + conditional rules |
+| `POST /api/runs` · `/:id/start` · `/:id/stop` | Create / run / cancel |
+| `GET /api/runs/:id` · `/:id/events` · `/:id/export` | Snapshot · SSE · CSV |
+| `GET /api/library/runs` | Every execution |
+| `GET /api/library/runs/:id/ads` · `/export` | One execution's ads · CSV |
+| `PATCH`/`DELETE /api/library/runs/:id` | Rename / delete an execution |
+| `GET /api/library/stats` | Library size + which store is live |
+
+---
+
+## Diagnostics
+
+```bash
+npm run relevance:check -- plumbing US 30      # what the niche gate keeps vs drops, and why
+npm run relevance:check -- "home services" US 30
+npm run probe:feed -- plumbing US              # dump a raw GraphQL node
+npm run supabase:setup -- --check              # verify tables exist
+```
 
 ---
 
 ## Notes & caveats
 
 - Meta's Terms prohibit scraping; this tool is for research/educational use. It runs headless and human-paced.
-- The owner lookup is inherently unreliable — search engines throw consent walls and CAPTCHAs, and many small businesses publish no owner data. It fills what it can and marks the rest `not_found` / `blocked`, never blocking the run.
 - Meta changes its internals frequently. Selectors are anchored on the GraphQL feed rather than page markup; if a field stops extracting, start in `server/src/scraper/feedParser.js`.
-- Results and the dedup database persist in `server/data/leads.db`. Delete it (or use the in-app trash button) to start completely fresh.
+- Instagram follower counts require the optional enrichment phase — the feed only carries Facebook followers.

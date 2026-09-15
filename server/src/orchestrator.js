@@ -1,25 +1,26 @@
-// The automatic pipeline for one run, in sequence:
-//   1. Harvest   — collect unique businesses (one longest-running ad each),
-//                  skipping anything already in the DB, up to the target.
-//   2. Contacts  — visit each business's Facebook page for email/phone/website.
-//   3. Owners    — Hunter.io decision-maker lookup, falling back to search
-//                  engines and the company's own About page.
-//   4. Done      — export becomes available.
+// The automatic pipeline for one run:
+//
+//   1. Harvest  — pull ads off the Ad Library feed, drop anything already in the
+//                 shared library or outside the searched niche, and stop the
+//                 moment the target is hit.
+//   2. Enrich   — optional: open each advertiser's ad-details panel for the
+//                 Instagram handle and follower count the feed doesn't carry.
+//   3. Save     — write the run to the shared library in one batch.
 //
 // Every phase is wrapped so a failure never crashes the run; per-item errors are
-// logged and streamed, and the pipeline always finalizes.
+// logged and streamed, and the pipeline always finalizes. Results are saved even
+// when the run is stopped early or errors, so collected work is never lost.
 
 import { config } from './config.js';
-import { db } from './db.js';
 import { bus } from './eventStream.js';
 import { COUNTRIES } from './filters.js';
+import { library } from './library.js';
+import { createRelevanceGate } from './relevance.js';
 import { store } from './store.js';
-import { hunter } from './enrich/hunter.js';
-import { resolveOwner } from './enrich/ownerResolver.js';
-import { scrapeFacebookContact } from './scraper/contactScraper.js';
 import { harvest, newPage } from './scraper/engine.js';
+import { scrapeAdvertiserDetails } from './scraper/advertiserScraper.js';
 
-const countryName = (code) => COUNTRIES.find(c => c.code === code)?.name || code;
+const countryName = (code) => COUNTRIES.find((c) => c.code === code)?.name || code;
 
 export async function runPipeline(runId) {
   const run = store.get(runId);
@@ -27,22 +28,18 @@ export async function runPipeline(runId) {
   run.status = 'running';
   run.startedAt = new Date().toISOString();
   run.phase = 'harvesting';
+  run.seenForLibrary = [];
   emit(runId, { type: 'run_started', snapshot: store.snapshot(run) });
 
   try {
-    // Read the live Hunter credit balance before spending anything, so the run
-    // (and the UI) knows up front whether paid lookups are available.
-    if (config.ownerEnrichEnabled) {
-      run.hunter = await hunter.preflight();
-      emit(runId, { type: 'hunter_state', hunter: run.hunter });
-    }
-
     await harvestPhase(run);
-    if (!run.cancelRequested) await contactsPhase(run);
-    if (!run.cancelRequested && config.ownerEnrichEnabled) await ownersPhase(run);
+    if (!run.cancelRequested && run.filters.deepEnrich) await enrichPhase(run);
+    await savePhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
     run.errors.push({ scope: 'pipeline', message: err.message, ts: now() });
+    // Still try to keep whatever was collected.
+    try { await savePhase(run); } catch {}
     finalize(run, 'error', err.message);
   }
 }
@@ -52,32 +49,55 @@ async function harvestPhase(run) {
   run.phase = 'harvesting';
   emit(run.id, { type: 'phase_started', phase: 'harvesting', target: run.target });
 
+  // One gate per run: it learns this niche's categories as the harvest proceeds.
+  const relevance = config.relevance.enabled && run.filters.relevanceEnabled !== false
+    ? createRelevanceGate({
+      keywords: run.filters.keywords,
+      extraTerms: run.filters.nicheTerms || [],
+      minScore: run.filters.minRelevance ?? config.relevance.minScore,
+    })
+    : null;
+  run.relevance = relevance;
+
   await harvest({
     filters: run.filters,
     shouldStop: () => run.cancelRequested || run.counts.kept >= run.target,
     onAd: (rec) => {
-      const res = store.considerAd(run, rec);
-      if (res.status === 'added') {
-        db.markSeen(rec.library_id, res.business.business_key, run.id);
-        persist(run, res.business);
-        emit(run.id, { type: 'business_added', business: res.business, counts: run.counts });
-      } else if (res.status === 'updated') {
-        db.markSeen(rec.library_id, res.business.business_key, run.id);
-        persist(run, res.business);
-        emit(run.id, { type: 'business_updated', business: res.business, counts: run.counts });
+      const res = store.considerAd(run, rec, relevance);
+
+      if (res.status === 'added' || res.status === 'updated') {
+        library.note(rec.library_id, res.business.business_key);
+        emit(run.id, {
+          type: res.status === 'added' ? 'business_added' : 'business_updated',
+          business: res.business, counts: run.counts,
+        });
+        return;
+      }
+
+      // Remember ads we rejected so a later run doesn't re-evaluate them.
+      if (res.irrelevant) {
+        run.seenForLibrary.push({ library_id: rec.library_id, page_id: rec.page_id, outcome: 'irrelevant' });
+        emit(run.id, {
+          type: 'ad_rejected',
+          page_name: rec.page_name,
+          score: res.verdict?.score ?? null,
+          reason: res.verdict?.reason || null,
+          counts: run.counts,
+        });
       }
     },
     onProgress: (info) => {
       emit(run.id, {
         type: 'harvest_progress',
         country: countryName(info.country), keyword: info.keyword,
-        rawSeen: run.counts.rawSeen,
-        kept: run.counts.kept, skippedKnown: run.counts.skippedKnown, target: run.target,
+        rawSeen: run.counts.rawSeen, kept: run.counts.kept,
+        skippedKnown: run.counts.skippedKnown,
+        skippedIrrelevant: run.counts.skippedIrrelevant,
+        target: run.target,
       });
     },
     onError: (info) => {
-      // "no results for this keyword" is normal, not a failure — surface it as
-      // an informational notice so one empty keyword doesn't look like a crash.
+      // "no results for this keyword" is normal, not a failure.
       const kind = info.scope === 'no_results' ? 'notice' : 'error';
       run.errors.push({ scope: info.scope, message: info.message, kind, ts: now() });
       emit(run.id, { type: kind, scope: info.scope, message: info.message, recoverable: true });
@@ -87,77 +107,59 @@ async function harvestPhase(run) {
     emit(run.id, { type: 'error', scope: 'harvest', message: err.message, recoverable: true });
   });
 
-  emit(run.id, { type: 'phase_done', phase: 'harvesting', kept: run.counts.kept });
+  emit(run.id, {
+    type: 'phase_done', phase: 'harvesting',
+    kept: run.counts.kept,
+    nicheProfile: relevance?.profile() || null,
+  });
 }
 
-// ── Phase 2: Facebook contact enrichment ─────────────────────────────────────
-async function contactsPhase(run) {
-  run.phase = 'contacts';
-  const targets = run.businesses.filter(b => b.page_url && /facebook\.com/.test(b.page_url));
-  emit(run.id, { type: 'phase_started', phase: 'contacts', total: targets.length });
-  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'contacts', done: 0 }); return; }
+// ── Phase 2: advertiser details (optional) ───────────────────────────────────
+// The feed carries Facebook followers but not Instagram; those only exist in the
+// ad-details panel, which costs a page visit per advertiser. Off by default.
+async function enrichPhase(run) {
+  run.phase = 'enriching';
+  const targets = run.businesses.filter((b) => b.library_id);
+  emit(run.id, { type: 'phase_started', phase: 'enriching', total: targets.length });
+  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'enriching', done: 0 }); return; }
 
   await runPool(targets, config.enrichConcurrency, run, async (page, biz) => {
-    store.patchBusiness(run, biz.business_key, { contact_status: 'pending' });
-    emit(run.id, { type: 'contact_progress', current: biz.page_name, done: run.counts.contactsDone, total: targets.length });
     let patch;
     try {
-      patch = await scrapeFacebookContact(page, biz.page_url);
+      patch = await scrapeAdvertiserDetails(page, biz.library_id);
     } catch (err) {
-      patch = { contact_status: 'failed' };
-      logItemError(run, 'contact', biz, err);
+      patch = {};
+      run.errors.push({ scope: 'enrich', business: biz.page_name, message: err.message, ts: now() });
     }
     store.patchBusiness(run, biz.business_key, patch);
-    db.updateBusiness(biz.business_key, patch);
-    run.counts.contactsDone++;
+    run.counts.enrichedDone++;
     emit(run.id, {
       type: 'business_enriched', business_key: biz.business_key, patch,
-      done: run.counts.contactsDone, total: targets.length,
+      done: run.counts.enrichedDone, total: targets.length, current: biz.page_name,
     });
   });
 
-  emit(run.id, { type: 'phase_done', phase: 'contacts', done: run.counts.contactsDone });
+  emit(run.id, { type: 'phase_done', phase: 'enriching', done: run.counts.enrichedDone });
 }
 
-// ── Phase 3: owner enrichment (Hunter.io → search → website) ─────────────────
-async function ownersPhase(run) {
-  run.phase = 'owners';
-  const targets = run.businesses.filter(b => b.page_name);
-  emit(run.id, { type: 'phase_started', phase: 'owners', total: targets.length, hunter: hunter.budgetState() });
-  if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'owners', done: 0 }); return; }
-
-  await runPool(targets, Math.min(2, config.enrichConcurrency), run, async (page, biz) => {
-    store.patchBusiness(run, biz.business_key, { owner_status: 'pending' });
-    emit(run.id, { type: 'owner_progress', current: biz.page_name, done: run.counts.ownersDone, total: targets.length });
-    let patch;
-    try {
-      // The contacts phase already found a website for many businesses; the
-      // resolver uses it both as a Hunter domain and as an About-page source.
-      patch = await resolveOwner(page, biz, {
-        countryCode: biz.country,
-        countryName: countryName(biz.country),
-        log: (msg) => run.log?.push?.(msg),
-      });
-    } catch (err) {
-      patch = { owner_status: 'failed' };
-      logItemError(run, 'owners', biz, err);
-    }
-    delete patch.owner_error;
-    store.patchBusiness(run, biz.business_key, patch);
-    db.updateBusiness(biz.business_key, patch);
-    run.counts.ownersDone++;
-    run.hunter = hunter.budgetState();
-    emit(run.id, {
-      type: 'business_owner', business_key: biz.business_key, patch,
-      done: run.counts.ownersDone, total: targets.length, hunter: run.hunter,
-    });
-  });
-
-  emit(run.id, { type: 'phase_done', phase: 'owners', done: run.counts.ownersDone, hunter: hunter.budgetState() });
+// ── Phase 3: save to the shared library ──────────────────────────────────────
+async function savePhase(run) {
+  if (run.saved) return;
+  run.phase = 'saving';
+  emit(run.id, { type: 'phase_started', phase: 'saving', total: run.businesses.length });
+  try {
+    const res = await library.save(run.businesses, run.id);
+    await library.noteSeen(run.seenForLibrary || [], run.id);
+    run.saved = true;
+    run.saveResult = res;
+    emit(run.id, { type: 'phase_done', phase: 'saving', saved: res.saved, remote: res.remote });
+  } catch (err) {
+    run.errors.push({ scope: 'save', message: err.message, ts: now() });
+    emit(run.id, { type: 'error', scope: 'save', message: err.message, recoverable: true });
+  }
 }
 
 // ── Shared worker pool ───────────────────────────────────────────────────────
-// Runs `worker(page, item)` over items with N reusable pages, honoring cancel.
 async function runPool(items, concurrency, run, worker) {
   const queue = items.slice();
   const n = Math.min(Math.max(1, concurrency), queue.length);
@@ -186,23 +188,15 @@ async function runPool(items, concurrency, run, worker) {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-function persist(run, business) {
-  db.upsertBusiness({ ...business, run_id: run.id });
-}
-
-function logItemError(run, scope, biz, err) {
-  run.errors.push({ scope, business: biz.page_name, message: err.message, ts: now() });
-  emit(run.id, { type: 'error', scope, message: `${biz.page_name}: ${err.message}`, recoverable: true });
-}
-
 function finalize(run, status, message) {
   run.status = status;
   run.phase = 'done';
   run.finishedAt = now();
   if (status === 'stopped') run.stoppedAt = now();
+  library.saveRun(run).catch(() => {});
   emit(run.id, {
     type: 'run_finished', status, message: message || null,
-    counts: run.counts, dbStats: db.stats(), hunter: hunter.budgetState(),
+    counts: run.counts, saveResult: run.saveResult || null,
     snapshot: store.snapshot(run),
   });
 }

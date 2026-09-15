@@ -1,187 +1,224 @@
-import { ChevronDown, Play, SlidersHorizontal, Square } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, Play, SlidersHorizontal, Square, Target } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import InfoTip from './InfoTip.jsx';
 import KeywordInput from './KeywordInput.jsx';
 import MultiSelect from './MultiSelect.jsx';
 import Select from './Select.jsx';
 
-const inputCls =
-  'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100';
-
-function Label({ children, help }) {
-  return (
-    <span className="mb-1.5 flex items-center gap-1 text-xs font-medium text-slate-600">
-      {children}
-      {help && <InfoTip text={help} />}
-    </span>
-  );
-}
-
+// Mirrors the Meta Ad Library's own filter bar, including which options it
+// greys out and when. The rules come from the server (`meta.conditional`) so
+// they are defined once rather than duplicated here.
 export default function FilterPanel({ meta, filters, setFilters, onStart, onStop, running, busy }) {
-  const [advanced, setAdvanced] = useState(false);
-  const help = meta.help || {};
+  const [open, setOpen] = useState(false);
   const set = (patch) => setFilters((f) => ({ ...f, ...patch }));
 
-  // Dynamic behavior — mirror Meta: restricted ad categories (Properties /
-  // Employment / Financial) only exist in the US & Canada. Grey them out and
-  // auto-reset to "All ads" if the supporting country is removed.
-  const adCategoryOptions = useMemo(() => {
-    const countries = filters.countries || [];
-    return (meta.adCategories || []).map((c) => ({
-      ...c,
-      disabled: c.restrictedTo && !countries.includes('ALL') && !countries.some((cc) => c.restrictedTo.includes(cc)),
-    }));
-  }, [meta.adCategories, filters.countries]);
+  const restricted = meta.conditional?.adCategoryRestrictedTo || {};
+  const mediaBlocked = (meta.conditional?.mediaTypeUnavailableFor || []).includes(filters.adType);
 
-  useEffect(() => {
-    const cur = adCategoryOptions.find((c) => c.value === filters.adType);
-    if (cur?.disabled) set({ adType: 'all' });
-  }, [adCategoryOptions]); // eslint-disable-line
+  // Meta only offers the transparency categories in specific countries.
+  const adCategories = useMemo(() => meta.adCategories.map((c) => {
+    const allow = restricted[c.value];
+    if (!allow) return c;
+    const ok = filters.countries.some((x) => allow.includes(x) || x === 'ALL');
+    return { ...c, disabled: !ok, note: ok ? null : `Only in ${allow.join(', ')}` };
+  }), [meta.adCategories, filters.countries]);
 
-  const advancedCount =
-    (filters.matchType !== 'keyword_unordered' ? 1 : 0) +
-    (filters.activeStatus !== 'active' ? 1 : 0) +
-    (filters.mediaType !== 'all' ? 1 : 0) +
-    (filters.platforms?.length ? 1 : 0) +
-    (filters.languages?.length ? 1 : 0) +
-    (filters.startDateMin || filters.startDateMax ? 1 : 0);
+  // If the country changes so the chosen category is no longer legal, fall back
+  // to "All ads" rather than silently sending an invalid search.
+  const onCountries = (countries) => {
+    const allow = restricted[filters.adType];
+    const stillOk = !allow || countries.some((x) => allow.includes(x) || x === 'ALL');
+    set({ countries, adType: stillOk ? filters.adType : 'all' });
+  };
 
-  const ready = filters.keywords?.length > 0 && filters.countries?.length > 0;
-
-  // Compact running banner.
-  if (running) {
-    return (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white px-5 py-3.5 shadow-sm">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
-          <span className="inline-flex items-center gap-2 font-medium text-emerald-600">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            </span>
-            Running
-          </span>
-          <span className="text-slate-300">·</span>
-          <span className="font-medium text-slate-800">
-            {filters.keywords?.length > 1
-              ? `${filters.keywords.length} keywords`
-              : `“${filters.keywords?.[0] || ''}”`}
-          </span>
-          <span className="text-slate-300">·</span>
-          <span>{(filters.countries || []).join(', ')}</span>
-          <span className="text-slate-300">·</span>
-          <span>target {filters.target.toLocaleString()}</span>
-        </div>
-        <button onClick={onStop} className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100">
-          <Square size={14} /> Stop
-        </button>
-      </div>
-    );
-  }
+  const canStart = filters.keywords.length > 0 && filters.countries.length > 0 && !busy;
+  const activeCount = countActive(filters, meta);
 
   return (
-    <div className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm">
-      {/* Primary row */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
-        <div className="md:col-span-3">
-          <Label help={help.countries}>Countries</Label>
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      {/* Primary row — what Meta shows without opening Filters */}
+      <div className="flex flex-wrap items-end gap-3 p-4">
+        <div className="min-w-[260px] flex-1">
+          <Label>Keywords <InfoTip text={meta.help.keyword} /></Label>
+          <KeywordInput
+            value={filters.keywords}
+            onChange={(keywords) => set({ keywords })}
+            disabled={running}
+          />
+        </div>
+
+        <Field label={<>Countries <InfoTip text={meta.help.countries} /></>} className="w-56">
           <MultiSelect
-            options={(meta.countries || []).map((c) => ({ value: c.code, label: c.name }))}
-            value={filters.countries}
-            onChange={(v) => set({ countries: v })}
-            placeholder="Pick countries…"
+            options={meta.countries.map((c) => ({ value: c.code, label: c.name }))}
+            value={filters.countries} onChange={onCountries}
+            disabled={running} placeholder="Select countries"
           />
-        </div>
-        <div className="md:col-span-3">
-          <Label help={help.adType}>Ad category</Label>
+        </Field>
+
+        <Field label={<>Ad category <InfoTip text={meta.help.adType} /></>} className="w-52">
           <Select
-            value={filters.adType}
-            onChange={(v) => set({ adType: v })}
-            options={adCategoryOptions.map((c) => ({ value: c.value, label: c.label, disabled: c.disabled, disabledHint: 'US/CA only' }))}
+            options={adCategories} value={filters.adType}
+            onChange={(adType) => set({ adType })} disabled={running}
           />
-        </div>
-        <div className="md:col-span-4">
-          <Label help={help.keyword}>Keywords</Label>
-          <KeywordInput value={filters.keywords} onChange={(v) => set({ keywords: v })} />
-        </div>
-        <div className="md:col-span-2">
-          <Label help={help.target}>Target</Label>
-          <input
-            type="number" min={1} max={20000}
-            value={filters.target}
-            onChange={(e) => set({ target: Math.max(1, Math.min(20000, parseInt(e.target.value) || 1)) })}
-            className={`${inputCls} tabular`}
-          />
-        </div>
+        </Field>
+
+        <Field label={<>Target <InfoTip text={`${meta.help.target} Maximum ${meta.maxTarget.toLocaleString()}.`} /></>} className="w-32">
+          <div className="relative">
+            <Target size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="number" min={1} max={meta.maxTarget} value={filters.target}
+              disabled={running}
+              onChange={(e) => set({ target: clamp(e.target.value, 1, meta.maxTarget) })}
+              className="w-full rounded-xl border border-slate-200 py-2 pl-7 pr-2 text-sm tabular shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50"
+            />
+          </div>
+        </Field>
+
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium shadow-sm transition ${
+            activeCount ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+          }`}
+        >
+          <SlidersHorizontal size={15} /> Filters
+          {activeCount > 0 && <span className="rounded-md bg-brand-600 px-1.5 text-[10px] font-semibold text-white">{activeCount}</span>}
+          <ChevronDown size={14} className={open ? 'rotate-180 transition' : 'transition'} />
+        </button>
+
+        {running ? (
+          <button onClick={onStop}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700">
+            <Square size={14} /> Stop
+          </button>
+        ) : (
+          <button onClick={onStart} disabled={!canStart}
+            title={canStart ? '' : 'Add at least one keyword and country'}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300">
+            <Play size={14} /> {busy ? 'Starting…' : 'Start scraping'}
+          </button>
+        )}
       </div>
 
-      {/* Advanced filters toggle */}
-      <button
-        onClick={() => setAdvanced((a) => !a)}
-        className="mt-4 inline-flex items-center gap-1.5 rounded-lg px-1 text-xs font-medium text-brand-600 transition hover:text-brand-700"
-      >
-        <SlidersHorizontal size={13} /> Filters
-        {advancedCount > 0 && <span className="rounded-full bg-brand-100 px-1.5 text-[10px] text-brand-700">{advancedCount}</span>}
-        <ChevronDown size={13} className={`transition-transform ${advanced ? 'rotate-180' : ''}`} />
-      </button>
+      {/* Expanded — matches Meta's Filters modal, plus our niche controls */}
+      {open && (
+        <div className="grid gap-4 border-t border-slate-100 px-4 py-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label={<>Match type <InfoTip text={meta.help.matchType} /></>}>
+            <Select options={meta.matchTypes} value={filters.matchType}
+              onChange={(matchType) => set({ matchType })} disabled={running} />
+          </Field>
 
-      {advanced && (
-        <div className="mt-3 grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <Label help={help.matchType}>Keyword match</Label>
-            <Select value={filters.matchType} onChange={(v) => set({ matchType: v })}
-              options={(meta.matchTypes || []).map((m) => ({ value: m.value, label: m.label }))} />
-          </div>
-          <div>
-            <Label help={help.activeStatus}>Active status</Label>
-            <Select value={filters.activeStatus} onChange={(v) => set({ activeStatus: v })}
-              options={(meta.activeStatuses || []).map((s) => ({ value: s.value, label: s.label }))} />
-          </div>
-          <div>
-            <Label help={help.mediaType}>Media type</Label>
-            <Select value={filters.mediaType} onChange={(v) => set({ mediaType: v })}
-              options={(meta.mediaTypes || []).map((m) => ({ value: m.value, label: m.label }))} />
-          </div>
-          <div>
-            <Label help={help.platforms}>Platforms</Label>
-            <MultiSelect
-              options={(meta.platforms || []).map((p) => ({ value: p.value, label: p.label }))}
-              value={filters.platforms} onChange={(v) => set({ platforms: v })}
-              placeholder="All platforms" searchable={false}
+          <Field label={<>Active status <InfoTip text={meta.help.activeStatus} /></>}>
+            <Select options={meta.activeStatuses} value={filters.activeStatus}
+              onChange={(activeStatus) => set({ activeStatus })} disabled={running} />
+          </Field>
+
+          <Field
+            label={<>Media type <InfoTip text={mediaBlocked ? 'Meta does not apply media type to the issues/elections/politics category.' : meta.help.mediaType} /></>}
+          >
+            <Select
+              options={meta.mediaTypes} value={mediaBlocked ? 'all' : filters.mediaType}
+              onChange={(mediaType) => set({ mediaType })}
+              disabled={running || mediaBlocked}
             />
-          </div>
-          <div>
-            <Label help={help.languages}>Languages</Label>
-            <MultiSelect
-              options={(meta.languages || []).map((l) => ({ value: l.value, label: l.label }))}
-              value={filters.languages} onChange={(v) => set({ languages: v })}
-              placeholder="Any language"
-            />
-          </div>
-          <div>
-            <Label help={help.dateRange}>Started running — date range</Label>
-            <div className="flex items-center gap-2">
-              <input type="date" className={inputCls} value={filters.startDateMin || ''} onChange={(e) => set({ startDateMin: e.target.value })} />
-              <span className="text-xs text-slate-400">to</span>
-              <input type="date" className={inputCls} value={filters.startDateMax || ''} onChange={(e) => set({ startDateMax: e.target.value })} />
+            {mediaBlocked && <Hint>Not available for this ad category</Hint>}
+          </Field>
+
+          <Field label={<>Sort by <InfoTip text="Matches the Ad Library's own ordering." /></>}>
+            <Select options={meta.sorts} value={filters.sort}
+              onChange={(sort) => set({ sort })} disabled={running} />
+          </Field>
+
+          <Field label={<>Platforms <InfoTip text={meta.help.platforms} /></>}>
+            <MultiSelect options={meta.platforms} value={filters.platforms}
+              onChange={(platforms) => set({ platforms })} disabled={running} placeholder="All platforms" />
+          </Field>
+
+          <Field label={<>Languages <InfoTip text={meta.help.languages} /></>}>
+            <MultiSelect options={meta.languages} value={filters.languages}
+              onChange={(languages) => set({ languages })} disabled={running} placeholder="All languages" />
+          </Field>
+
+          <Field label={<>Started after <InfoTip text={meta.help.dateRange} /></>}>
+            <input type="date" value={filters.startDateMin} disabled={running}
+              max={filters.startDateMax || undefined}
+              onChange={(e) => set({ startDateMin: e.target.value })}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50" />
+          </Field>
+
+          <Field label="Started before">
+            <input type="date" value={filters.startDateMax} disabled={running}
+              min={filters.startDateMin || undefined}
+              onChange={(e) => set({ startDateMax: e.target.value })}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50" />
+          </Field>
+
+          {/* ── Niche relevance ── */}
+          <div className="sm:col-span-2 lg:col-span-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox" checked={filters.relevanceEnabled} disabled={running}
+                  onChange={(e) => set({ relevanceEnabled: e.target.checked })}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400"
+                />
+                <span className="text-sm font-medium text-slate-700">Only keep ads in my niche</span>
+                <InfoTip text="Meta's keyword search is loose — a plumbing search returns supplements and gadgets too. This scores every ad against your keyword using its text, destination and Meta's own page category, and drops the ones that don't belong." />
+              </label>
+              <div className="mt-1 pl-6 text-[11px] leading-relaxed text-slate-400">
+                Filtered-out ads don’t count toward your target, so you still get the exact number you asked for.
+              </div>
+
+              {filters.relevanceEnabled && (
+                <div className="mt-3 grid gap-3 pl-6 sm:grid-cols-2">
+                  <Field label={<>Also count as my niche <InfoTip text="Optional related terms, e.g. searching “plumbing” you might add: drain, water heater, HVAC. Widens what counts as relevant." /></>}>
+                    <KeywordInput
+                      value={filters.nicheTerms} onChange={(nicheTerms) => set({ nicheTerms })}
+                      disabled={running} placeholder="Add related terms…"
+                    />
+                  </Field>
+                  <Field label={<>Advertiser details <InfoTip text="Opens each advertiser's ad-details panel for their Instagram handle and follower count, which the feed doesn't include. Accurate but much slower — roughly a page load per advertiser." /></>}>
+                    <label className="flex h-[38px] cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 shadow-sm">
+                      <input
+                        type="checkbox" checked={filters.deepEnrich} disabled={running}
+                        onChange={(e) => set({ deepEnrich: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400"
+                      />
+                      <span className="text-sm text-slate-600">Fetch Instagram followers (slower)</span>
+                    </label>
+                  </Field>
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
-
-      <div className="mt-5 flex items-center justify-between">
-        <div className="text-xs text-slate-400">
-          {ready
-            ? `Ready · ${filters.keywords.length} keyword${filters.keywords.length === 1 ? '' : 's'} × ${filters.countries.length} ${filters.countries.length === 1 ? 'country' : 'countries'} · up to ${filters.target.toLocaleString()} unique businesses`
-            : 'Add at least one keyword and pick at least one country.'}
-        </div>
-        <button
-          onClick={onStart}
-          disabled={!ready || busy}
-          className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-        >
-          <Play size={15} fill="currentColor" /> {busy ? 'Starting…' : 'Start scraping'}
-        </button>
-      </div>
     </div>
   );
+}
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || lo));
+
+function countActive(f, meta) {
+  let n = 0;
+  if (f.matchType !== 'keyword_unordered') n++;
+  if (f.activeStatus !== 'active') n++;
+  if (f.mediaType !== 'all') n++;
+  if (f.sort !== (meta.sorts?.[0]?.value || 'impressions')) n++;
+  if (f.platforms.length) n++;
+  if (f.languages.length) n++;
+  if (f.startDateMin || f.startDateMax) n++;
+  if (f.nicheTerms?.length) n++;
+  if (f.deepEnrich) n++;
+  if (!f.relevanceEnabled) n++;
+  return n;
+}
+
+function Label({ children }) {
+  return <div className="mb-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">{children}</div>;
+}
+function Field({ label, children, className = '' }) {
+  return <div className={className}><Label>{label}</Label>{children}</div>;
+}
+function Hint({ children }) {
+  return <div className="mt-1 text-[10px] text-amber-600">{children}</div>;
 }

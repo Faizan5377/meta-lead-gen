@@ -23,8 +23,10 @@ export const config = {
   slowMoMs: num(process.env.SLOW_MO_MS, 0),
 
   // Harvest target. The scraper keeps going until it collects this many unique
-  // businesses OR genuinely runs out of ads while scrolling.
-  targetAds: num(process.env.TARGET_ADS, 5000),
+  // businesses OR genuinely runs out of ads while scrolling. MAX_TARGET is a
+  // hard ceiling enforced when normalising filters.
+  targetAds: num(process.env.TARGET_ADS, 500),
+  maxTarget: num(process.env.MAX_TARGET, 2500),
 
   // Safety ceiling for the WHOLE harvest (all keywords × countries), so a stuck
   // run eventually ends. Generous, because a multi-keyword sweep to 5,000 ads
@@ -36,45 +38,24 @@ export const config = {
   stableScrollsToStop: num(process.env.STABLE_SCROLLS_TO_STOP, 5),
   noNewAdsGraceMs: num(process.env.NO_NEW_ADS_GRACE_MS, 7000),
 
-  // Parallel pages for the enrichment phases (FB contacts, owner lookup).
+  // Parallel pages for the optional advertiser-detail enrichment.
   enrichConcurrency: num(process.env.ENRICH_CONCURRENCY, 3),
 
-  // The automatic owner-enrichment phase. On by default; can be disabled.
-  // GOOGLE_ENRICH is the legacy name for this flag and is still honoured.
-  ownerEnrichEnabled: bool(process.env.OWNER_ENRICH ?? process.env.GOOGLE_ENRICH, true),
-
-  // Search-engine owner fallback, used when Hunter has no answer.
-  ownerSearchEnabled: bool(process.env.OWNER_SEARCH_ENABLED, true),
-
-  // Whether to fall back to SCRAPING search engines after the SERP APIs come up
-  // empty. Scraping is free but fragile (CAPTCHAs, IP throttling); turn it off
-  // to rely on the APIs alone.
-  ownerScrapeFallback: bool(process.env.OWNER_SCRAPE_FALLBACK, true),
-
-  // SERP APIs — the reliable path for owner search. All optional: with no keys
-  // set, owner search falls back to scraping and nothing else changes.
-  serp: {
-    enabled: bool(process.env.SERP_ENABLED, true),
-    serperKey: process.env.SERPER_API_KEY || '',
-    tavilyKey: process.env.TAVILY_API_KEY || '',
-    // Safety cap per provider per calendar month, counted in SQLite so it
-    // survives restarts. Keeps a free tier from silently becoming a bill.
-    maxPerMonth: num(process.env.SERP_MAX_PER_MONTH, 1000),
+  // Relevance gate. Meta's keyword search is loose — searching "plumbing"
+  // returns medical and ecommerce ads — so every harvested ad is scored against
+  // the keyword's niche and anything below the threshold is dropped.
+  relevance: {
+    enabled: bool(process.env.RELEVANCE_ENABLED, true),
+    minScore: num(process.env.RELEVANCE_MIN_SCORE, 40),
   },
 
-  // Hunter.io — the primary owner/decision-maker source.
-  //
-  // Credits are metered per month and a harvest can surface thousands of
-  // businesses, so paid calls are budgeted twice over: `maxCreditsPerRun` caps
-  // one run, and `minCreditsReserve` stops us from draining the account to zero
-  // (leaving headroom for other tooling on the same key). Both are enforced in
-  // enrich/hunter.js on top of the free email-count gate.
-  hunter: {
-    apiKey: process.env.HUNTER_API_KEY || '',
-    enabled: bool(process.env.HUNTER_ENABLED, true),
-    maxCreditsPerRun: num(process.env.HUNTER_MAX_CREDITS_PER_RUN, 100),
-    minCreditsReserve: num(process.env.HUNTER_MIN_CREDITS_RESERVE, 10),
-    cacheDays: num(process.env.HUNTER_CACHE_DAYS, 30),
+  // Supabase — the shared library every run reads and writes. Cross-run dedup
+  // lives here so repeat searches only ever surface NEW ads, and the Library
+  // page queries it directly. Falls back to local SQLite when unreachable.
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    serviceKey: process.env.SUPABASE_SERVICE_KEY || '',
+    enabled: bool(process.env.SUPABASE_ENABLED, true),
   },
 
   dbPath: process.env.DB_PATH || path.resolve(__dirname, '../data/leads.db'),

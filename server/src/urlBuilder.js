@@ -21,6 +21,14 @@ export function buildSearchUrl(filters, country, keyword) {
   if (filters.startDateMin) params.set('start_date[min]', filters.startDateMin);
   if (filters.startDateMax) params.set('start_date[max]', filters.startDateMax);
 
+  // Sort. Meta's own values; "impressions" is its default, so it's left off the
+  // URL to keep the request identical to a plain search.
+  if (filters.sort === 'recent') params.set('sort_data[direction]', 'desc'),
+    params.set('sort_data[mode]', 'relevancy_monthly_grouped');
+
+  // Restrict to specific advertiser page ids (Meta's "Advertiser" filter).
+  (filters.advertiserIds || []).forEach((id, i) => params.set(`view_all_page_id[${i}]`, id));
+
   return `https://www.facebook.com/ads/library/?${params.toString()}`;
 }
 

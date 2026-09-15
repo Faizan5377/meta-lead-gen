@@ -46,6 +46,21 @@ export function extractAdsFromFeed(json) {
   return out;
 }
 
+// Meta's own platform enum -> the labels we show and filter on.
+const PLATFORM_LABEL = {
+  FACEBOOK: 'Facebook',
+  INSTAGRAM: 'Instagram',
+  AUDIENCE_NETWORK: 'Audience Network',
+  MESSENGER: 'Messenger',
+  THREADS: 'Threads',
+  WHATSAPP: 'WhatsApp',
+};
+
+function normalizePlatforms(raw) {
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return Array.from(new Set(list.map((p) => PLATFORM_LABEL[String(p).toUpperCase()] || String(p))));
+}
+
 function normalizeFeedAd(r, groupSize) {
   const libraryId = r.ad_archive_id || r.adArchiveID;
   if (!libraryId) return null;
@@ -68,14 +83,27 @@ function normalizeFeedAd(r, groupSize) {
     page_name: s.page_name || null,
     page_url: s.page_profile_uri || null,
     page_categories: categories,
-    followers: numOrNull(s.page_like_count),
+    // page_like_count is the FACEBOOK follower count — the only follower figure
+    // the feed carries. Instagram followers live in the "About the advertiser"
+    // modal, which costs a page visit, so they're filled by optional enrichment.
+    followers_facebook: numOrNull(s.page_like_count),
+    followers_instagram: null,
+    instagram_handle: null,
+    page_profile_picture_url: s.page_profile_picture_url || null,
+
+    // The platforms this ad actually runs on, straight from the feed.
+    platforms: normalizePlatforms(r.publisher_platform),
 
     is_active: r.is_active === true || r.is_active === 'true',
     start_date: startDate,
     end_date: endDate,
     days_running: startDate ? daysSince(startDate) : null,
     total_active_time: numOrNull(r.total_active_time),
-    collation_count: groupSize,
+    // How many ads share this creative — Meta's "N ads use this creative".
+    ads_running: groupSize,
+    collation_id: r.collation_id || null,
+    // Direct link so the ad can be opened in the Ad Library by hand.
+    ad_url: `https://www.facebook.com/ads/library/?id=${libraryId}`,
 
     cta_text: s.cta_text || null,
     cta_type: s.cta_type || null,
@@ -88,12 +116,9 @@ function normalizeFeedAd(r, groupSize) {
     image_url: media.image,
     video_url: media.video,
 
-    // Enrichment slots (filled by later phases).
-    contact_email: null, contact_phone: null, contact_website: null, contact_status: 'idle',
-    email_source: null,
-    owner_name: null, owner_title: null, owner_email: null, owner_linkedin: null,
-    owner_phone: null, owner_confidence: null, owner_source: null, owner_status: 'idle',
-    company_domain: null, company_domain_source: null,
+    // Filled by the relevance gate.
+    relevance_score: null,
+    relevance_reason: null,
   };
 }
 

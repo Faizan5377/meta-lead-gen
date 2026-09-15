@@ -1,179 +1,179 @@
-import { Search } from 'lucide-react';
+import { ExternalLink, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { formatFollowers, safeHost } from '../lib/format.js';
 
-function ActiveBadge({ active }) {
-  return active
-    ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">Active</span>
-    : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">Inactive</span>;
-}
+const PLATFORM_ICON = {
+  Facebook: 'f', Instagram: 'ig', Messenger: 'm', Threads: '@',
+  'Audience Network': 'an', WhatsApp: 'wa',
+};
 
-function Contact({ status, value, kind }) {
-  if (status === 'pending') return <span className="inline-block h-3 w-16 shimmer" />;
-  if (!value) return <span className="text-slate-300">—</span>;
-  if (kind === 'email') return <a href={`mailto:${value}`} className="text-brand-600 hover:underline" title={value}>{value}</a>;
-  if (kind === 'phone') return <a href={`tel:${value}`} className="tabular text-slate-700 hover:text-brand-600" title={value}>{value}</a>;
-  return <a href={value} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline" title={value}>{safeHost(value)}</a>;
-}
-
-// Where an owner came from, at a glance. Hunter is verified data; the scraped
-// sources are inferred, so they read as muted.
-function SourceBadge({ source, confidence }) {
-  if (!source) return null;
-  const isHunter = source === 'hunter';
-  const isLinkedIn = source.startsWith('linkedin:');
-  const label = isHunter ? 'Hunter' : isLinkedIn ? 'LinkedIn' : source.startsWith('website:') ? 'Website' : source;
-  const tone = isHunter
-    ? 'border-brand-200 bg-brand-50 text-brand-700'
-    : isLinkedIn
-      ? 'border-sky-200 bg-sky-50 text-sky-700'
-      : 'border-slate-200 bg-slate-50 text-slate-500';
+function Platforms({ list }) {
+  const arr = Array.isArray(list) ? list : [];
+  if (!arr.length) return <span className="text-slate-300">—</span>;
   return (
-    <span
-      title={`Source: ${source}${confidence != null ? ` · confidence ${confidence}%` : ''}`}
-      className={`inline-block rounded border px-1 py-px text-[9px] font-medium uppercase tracking-wide ${tone}`}
-    >
-      {label}{confidence != null ? ` ${confidence}` : ''}
-    </span>
+    <div className="flex flex-wrap gap-1">
+      {arr.map((p) => (
+        <span key={p} title={p}
+          className="rounded border border-slate-200 bg-slate-50 px-1 py-px text-[9px] font-semibold uppercase text-slate-500">
+          {PLATFORM_ICON[p] || p.slice(0, 2)}
+        </span>
+      ))}
+    </div>
   );
 }
 
-function Owner({ b }) {
-  if (b.owner_status === 'pending') return <span className="inline-block h-3 w-20 shimmer" />;
-  if (b.owner_name) {
-    return (
-      <div className="space-y-0.5">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate font-medium text-slate-800" title={b.owner_name}>{b.owner_name}</span>
-          {b.owner_linkedin && (
-            <a href={b.owner_linkedin} target="_blank" rel="noreferrer" title="LinkedIn profile"
-              className="shrink-0 text-[10px] text-sky-600 hover:underline">in</a>
-          )}
-        </div>
-        {b.owner_title && <div className="truncate text-[11px] text-slate-400" title={b.owner_title}>{b.owner_title}</div>}
-        {b.owner_email && (
-          <a href={`mailto:${b.owner_email}`} title={b.owner_email}
-            className="block truncate text-[11px] text-brand-600 hover:underline">{b.owner_email}</a>
-        )}
-        <SourceBadge source={b.owner_source} confidence={b.owner_confidence} />
-      </div>
-    );
-  }
-  if (b.owner_status === 'blocked') return <span className="text-[11px] text-amber-500" title="Every search engine blocked the lookup">blocked</span>;
-  if (b.owner_status === 'not_found') return <span className="text-[11px] text-slate-400" title="No owner published anywhere we can reach">not found</span>;
-  return <span className="text-slate-300">—</span>;
+// Days running is the headline signal: a long-running ad is a proven ad.
+function Duration({ days }) {
+  if (days == null) return <span className="text-slate-300">—</span>;
+  const n = Number(days);
+  const tone = n >= 365 ? 'text-brand-700 font-semibold'
+    : n >= 90 ? 'text-brand-600 font-medium' : 'text-slate-600';
+  const label = n >= 365 ? `${(n / 365).toFixed(1)}y` : n >= 30 ? `${Math.round(n / 30)}mo` : `${n}d`;
+  return <span className={`tabular ${tone}`} title={`${n} days`}>{label}</span>;
 }
 
 const COLS = [
   { key: 'page_name', label: 'Business', sortable: true },
-  { key: 'followers', label: 'Followers', sortable: true, align: 'right' },
+  { key: 'days_running', label: 'Running', sortable: true, align: 'right' },
+  { key: 'ads_running', label: 'Ads', sortable: true, align: 'right' },
+  { key: 'platforms', label: 'Platforms' },
+  { key: 'followers_facebook', label: 'Followers', sortable: true, align: 'right' },
   { key: 'page_categories', label: 'Category' },
+  { key: 'is_active', label: 'Status' },
   { key: 'keyword', label: 'Keyword', sortable: true },
   { key: 'country', label: 'Country' },
-  { key: 'is_active', label: 'Status' },
-  { key: 'days_running', label: 'Days', sortable: true, align: 'right' },
-  { key: 'owner', label: 'Owner' },
-  { key: 'contact_email', label: 'Email' },
-  { key: 'contact_phone', label: 'Phone' },
-  { key: 'contact_website', label: 'Website' },
-  { key: 'cta_text', label: 'CTA' },
-  { key: 'display_format', label: 'Format' },
-  { key: 'links', label: 'Links', align: 'right' },
+  { key: 'relevance_score', label: 'Match', sortable: true, align: 'right' },
+  { key: 'links', label: 'Open', align: 'right' },
 ];
 
-export default function ResultsTable({ businesses }) {
+export default function ResultsTable({ businesses, compact = false }) {
   const [q, setQ] = useState('');
-  const [sort, setSort] = useState({ col: 'followers', dir: 'desc' });
+  const [sort, setSort] = useState({ col: 'days_running', dir: 'desc' });
 
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     let arr = businesses;
     if (s) {
-      arr = arr.filter(b =>
-        `${b.page_name || ''} ${b.owner_name || ''} ${b.owner_title || ''} ${b.owner_email || ''} ${(b.page_categories || []).join(' ')} ${b.contact_email || ''} ${b.company_domain || ''} ${b.display_domain || ''} ${b.country || ''} ${(b.keywords || [b.keyword]).join(' ')}`
+      arr = arr.filter((b) =>
+        `${b.page_name || ''} ${(b.page_categories || []).join(' ')} ${b.display_domain || ''} ${b.country || ''} ${(b.keywords || [b.keyword]).join(' ')} ${b.title || ''}`
           .toLowerCase().includes(s));
     }
-    arr = arr.slice().sort((a, b) => {
+    return arr.slice().sort((a, b) => {
       let av = a[sort.col], bv = b[sort.col];
+      if (Array.isArray(av)) av = av.length;
+      if (Array.isArray(bv)) bv = bv.length;
       if (av == null) av = sort.dir === 'asc' ? Infinity : -Infinity;
       if (bv == null) bv = sort.dir === 'asc' ? Infinity : -Infinity;
-      const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
+      const cmp = typeof av === 'number' && typeof bv === 'number'
+        ? av - bv : String(av).localeCompare(String(bv));
       return sort.dir === 'asc' ? cmp : -cmp;
     });
-    return arr;
   }, [businesses, q, sort]);
 
-  const setSortCol = (col) => setSort(s => s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' });
+  const setSortCol = (col) =>
+    setSort((s) => (s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' }));
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm">
+    <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white ${compact ? '' : 'shadow-sm'}`}>
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
         <div className="relative">
           <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={q} onChange={(e) => setQ(e.target.value)}
-            placeholder="Search business, owner, category, email…"
+            placeholder="Search business, category, domain…"
             className="w-72 rounded-xl border border-slate-200 py-1.5 pl-8 pr-3 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
           />
         </div>
-        <div className="ml-auto text-xs tabular text-slate-400">{rows.length.toLocaleString()} / {businesses.length.toLocaleString()} shown</div>
+        <div className="ml-auto text-xs tabular text-slate-400">
+          {rows.length.toLocaleString()} / {businesses.length.toLocaleString()} shown
+        </div>
       </div>
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
             <tr>
-              {COLS.map(c => (
-                <th
-                  key={c.key}
+              {COLS.map((c) => (
+                <th key={c.key}
                   onClick={() => c.sortable && setSortCol(c.key)}
-                  className={`whitespace-nowrap px-3 py-2 font-medium ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.sortable ? 'cursor-pointer select-none hover:text-slate-600' : ''}`}
-                >
+                  className={`whitespace-nowrap px-3 py-2 font-medium ${c.align === 'right' ? 'text-right' : 'text-left'} ${c.sortable ? 'cursor-pointer select-none hover:text-slate-600' : ''}`}>
                   {c.label}{sort.col === c.key && <span className="ml-0.5">{sort.dir === 'asc' ? '▲' : '▼'}</span>}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map(b => (
+            {rows.map((b) => (
               <tr key={b.library_id} className="row-in align-top hover:bg-slate-50/70">
-                <td className="max-w-[200px] px-3 py-2.5">
+                <td className="max-w-[230px] px-3 py-2.5">
                   <div className="truncate font-medium text-slate-800" title={b.page_name}>{b.page_name || '—'}</div>
                   {b.display_domain && <div className="truncate text-[11px] text-slate-400">{b.display_domain}</div>}
                 </td>
-                <td className="px-3 py-2.5 text-right tabular text-slate-700" title={b.followers?.toLocaleString()}>
-                  {b.followers != null ? formatFollowers(b.followers) : <span className="text-slate-300">—</span>}
+                <td className="px-3 py-2.5 text-right"><Duration days={b.days_running} /></td>
+                <td className="px-3 py-2.5 text-right tabular text-slate-600">
+                  {Number(b.ads_running) > 1
+                    ? <span className="rounded bg-brand-50 px-1.5 py-0.5 font-medium text-brand-700">{b.ads_running}</span>
+                    : (b.ads_running ?? 1)}
                 </td>
-                <td className="max-w-[140px] px-3 py-2.5">
-                  <span className="truncate text-slate-600" title={(b.page_categories || []).join(', ')}>{(b.page_categories || [])[0] || <span className="text-slate-300">—</span>}</span>
+                <td className="px-3 py-2.5"><Platforms list={b.platforms} /></td>
+                <td className="px-3 py-2.5 text-right">
+                  <div className="tabular text-slate-700" title={`Facebook: ${b.followers_facebook ?? '—'}`}>
+                    {b.followers_facebook != null ? formatFollowers(b.followers_facebook) : <span className="text-slate-300">—</span>}
+                  </div>
+                  {b.followers_instagram != null && (
+                    <div className="tabular text-[11px] text-pink-500" title={`Instagram: ${b.followers_instagram}`}>
+                      {formatFollowers(b.followers_instagram)} ig
+                    </div>
+                  )}
                 </td>
-                <td className="max-w-[130px] px-3 py-2.5">
+                <td className="max-w-[150px] px-3 py-2.5">
+                  <span className="truncate text-slate-600" title={(b.page_categories || []).join(', ')}>
+                    {(b.page_categories || [])[0] || <span className="text-slate-300">—</span>}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5">
+                  {b.is_active
+                    ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">Active</span>
+                    : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">Inactive</span>}
+                </td>
+                <td className="max-w-[120px] px-3 py-2.5">
                   {b.keyword ? (
-                    <span
-                      className="inline-block max-w-full truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
-                      title={(b.keywords || [b.keyword]).join(', ')}
-                    >
+                    <span className="inline-block max-w-full truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
+                      title={(b.keywords || [b.keyword]).join(', ')}>
                       {b.keyword}
                       {b.keywords?.length > 1 && <span className="text-slate-400"> +{b.keywords.length - 1}</span>}
                     </span>
                   ) : <span className="text-slate-300">—</span>}
                 </td>
                 <td className="px-3 py-2.5 text-slate-600">{b.country || '—'}</td>
-                <td className="px-3 py-2.5"><ActiveBadge active={b.is_active} /></td>
-                <td className="px-3 py-2.5 text-right tabular text-slate-600">{b.days_running ?? <span className="text-slate-300">—</span>}</td>
-                <td className="max-w-[160px] px-3 py-2.5"><Owner b={b} /></td>
-                <td className="max-w-[190px] truncate px-3 py-2.5"><Contact status={b.contact_status} value={b.contact_email} kind="email" /></td>
-                <td className="max-w-[140px] truncate px-3 py-2.5"><Contact status={b.contact_status} value={b.contact_phone} kind="phone" /></td>
-                <td className="max-w-[150px] truncate px-3 py-2.5"><Contact status={b.contact_status} value={b.contact_website} kind="website" /></td>
-                <td className="max-w-[120px] truncate px-3 py-2.5 text-slate-600" title={b.cta_text}>{b.cta_text || <span className="text-slate-300">—</span>}</td>
-                <td className="px-3 py-2.5 text-[11px] text-slate-500">{b.display_format || '—'}</td>
+                <td className="px-3 py-2.5 text-right">
+                  {b.relevance_score != null ? (
+                    <span className="tabular text-[11px] text-slate-500" title={b.relevance_reason || ''}>
+                      {b.relevance_score}
+                    </span>
+                  ) : <span className="text-slate-300">—</span>}
+                </td>
                 <td className="px-3 py-2.5">
                   <div className="flex items-center justify-end gap-1">
-                    {b.ad_snapshot_url || b.library_id ? (
-                      <a href={b.ad_snapshot_url || `https://www.facebook.com/ads/library/?id=${b.library_id}`} target="_blank" rel="noreferrer" title="Ad in Library" className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">Ad</a>
-                    ) : null}
-                    {b.page_url && <a href={b.page_url} target="_blank" rel="noreferrer" title="Facebook page" className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">FB</a>}
-                    {b.link_url && <a href={b.link_url} target="_blank" rel="noreferrer" title="Destination" className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">↗</a>}
+                    {(b.ad_url || b.library_id) && (
+                      <a href={b.ad_url || `https://www.facebook.com/ads/library/?id=${b.library_id}`}
+                        target="_blank" rel="noreferrer" title="Open this ad in the Meta Ad Library"
+                        className="inline-flex items-center gap-1 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 hover:border-brand-300 hover:text-brand-600">
+                        Ad <ExternalLink size={9} />
+                      </a>
+                    )}
+                    {b.page_url && (
+                      <a href={b.page_url} target="_blank" rel="noreferrer" title="Facebook page"
+                        className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">
+                        FB
+                      </a>
+                    )}
+                    {b.link_url && (
+                      <a href={b.link_url} target="_blank" rel="noreferrer" title={`Destination: ${safeHost(b.link_url)}`}
+                        className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600">
+                        ↗
+                      </a>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -181,8 +181,8 @@ export default function ResultsTable({ businesses }) {
           </tbody>
         </table>
         {rows.length === 0 && (
-          <div className="px-6 py-14 text-center text-sm text-slate-400">
-            {businesses.length === 0 ? 'No businesses yet — start a search to populate the table.' : 'No rows match your search.'}
+          <div className="px-6 py-12 text-center text-sm text-slate-400">
+            {businesses.length === 0 ? 'No ads yet.' : 'No rows match your search.'}
           </div>
         )}
       </div>

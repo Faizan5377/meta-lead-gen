@@ -7,19 +7,20 @@
 export const initialState = {
   runId: null,
   status: 'idle',        // idle | running | finished | stopped | error
-  phase: 'idle',         // idle | harvesting | contacts | owners | done
+  phase: 'idle',         // idle | harvesting | enriching | saving | done
   filters: null,
   target: 0,
-  counts: { rawSeen: 0, kept: 0, contactsDone: 0, ownersDone: 0, skippedKnown: 0 },
-  phaseInfo: { contacts: { done: 0, total: 0 }, owners: { done: 0, total: 0 } },
-  hunter: null,          // { creditsRemaining, spentThisRun, budget, plan, ... }
+  counts: { rawSeen: 0, kept: 0, skippedKnown: 0, skippedIrrelevant: 0, enrichedDone: 0 },
+  phaseInfo: { enriching: { done: 0, total: 0 }, saving: { total: 0 } },
   businesses: [],
   index: {},             // business_key -> array index
+  rejected: [],          // ads the niche gate dropped, for transparency
+  nicheProfile: null,    // categories the gate learned this run
   errors: [],
   notices: [],           // e.g. "no ads for keyword X" — informational
   currentKeyword: null,
   ticker: null,
-  dbStats: null,
+  saveResult: null,
   exportReady: false,
 };
 
@@ -41,7 +42,6 @@ function fromSnapshot(state, snap) {
     filters: snap.filters ?? state.filters,
     target: snap.target ?? state.target,
     counts: snap.counts ?? state.counts,
-    hunter: snap.hunter ?? state.hunter,
     businesses,
     index: reindex(businesses),
     exportReady: !!snap.exportReady,
@@ -51,28 +51,38 @@ function fromSnapshot(state, snap) {
 export function reducer(state, ev) {
   switch (ev.type) {
     case 'run_started':
-      return { ...fromSnapshot(state, ev.snapshot), status: 'running', phase: 'harvesting', ticker: 'Starting…', errors: [] };
+      return {
+        ...fromSnapshot(state, ev.snapshot),
+        status: 'running', phase: 'harvesting',
+        ticker: 'Starting…', errors: [], notices: [], rejected: [], saveResult: null,
+      };
 
     case 'phase_started': {
       const phaseInfo = { ...state.phaseInfo };
-      if (ev.phase === 'contacts') phaseInfo.contacts = { done: 0, total: ev.total || 0 };
-      if (ev.phase === 'owners') phaseInfo.owners = { done: 0, total: ev.total || 0 };
-      return { ...state, phase: ev.phase, phaseInfo, hunter: ev.hunter ?? state.hunter, ticker: phaseLabel(ev.phase) };
+      if (ev.phase === 'enriching') phaseInfo.enriching = { done: 0, total: ev.total || 0 };
+      if (ev.phase === 'saving') phaseInfo.saving = { total: ev.total || 0 };
+      return { ...state, phase: ev.phase, phaseInfo, ticker: phaseLabel(ev.phase) };
     }
 
     case 'phase_done':
-      return { ...state, hunter: ev.hunter ?? state.hunter, ticker: `${phaseLabel(ev.phase)} — done` };
-
-    // Live Hunter credit balance, emitted at run start and as credits are spent.
-    case 'hunter_state':
-      return { ...state, hunter: ev.hunter ?? state.hunter };
+      return {
+        ...state,
+        nicheProfile: ev.nicheProfile ?? state.nicheProfile,
+        saveResult: ev.phase === 'saving' ? { saved: ev.saved, remote: ev.remote } : state.saveResult,
+        ticker: `${phaseLabel(ev.phase)} — done`,
+      };
 
     case 'harvest_progress':
       return {
         ...state,
         currentKeyword: ev.keyword ?? state.currentKeyword,
-        counts: { ...state.counts, rawSeen: ev.rawSeen, kept: ev.kept, skippedKnown: ev.skippedKnown ?? state.counts.skippedKnown },
-        ticker: `Harvesting${ev.keyword ? ` “${ev.keyword}”` : ''}${ev.country ? ` · ${ev.country}` : ''} — ${ev.kept} kept, ${ev.skippedKnown || 0} skipped`,
+        counts: {
+          ...state.counts,
+          rawSeen: ev.rawSeen, kept: ev.kept,
+          skippedKnown: ev.skippedKnown ?? state.counts.skippedKnown,
+          skippedIrrelevant: ev.skippedIrrelevant ?? state.counts.skippedIrrelevant,
+        },
+        ticker: `Harvesting${ev.keyword ? ` “${ev.keyword}”` : ''}${ev.country ? ` · ${ev.country}` : ''} — ${ev.kept}/${ev.target} kept`,
       };
 
     case 'business_added': {
@@ -97,32 +107,28 @@ export function reducer(state, ev) {
       return { ...state, businesses, counts: ev.counts || state.counts };
     }
 
+    // An ad the niche gate dropped. Kept in a short list so the user can see
+    // WHAT was filtered out and why, rather than silently losing results.
+    case 'ad_rejected':
+      return {
+        ...state,
+        counts: ev.counts || state.counts,
+        rejected: state.rejected.concat([{ name: ev.page_name, score: ev.score, reason: ev.reason }]).slice(-60),
+      };
+
     case 'business_enriched': {
       const i = state.index[ev.business_key];
-      const phaseInfo = { ...state.phaseInfo, contacts: { done: ev.done ?? state.phaseInfo.contacts.done, total: ev.total ?? state.phaseInfo.contacts.total } };
-      const counts = { ...state.counts, contactsDone: ev.done ?? state.counts.contactsDone };
-      if (i == null) return { ...state, phaseInfo, counts };
+      const phaseInfo = {
+        ...state.phaseInfo,
+        enriching: { done: ev.done ?? state.phaseInfo.enriching.done, total: ev.total ?? state.phaseInfo.enriching.total },
+      };
+      const counts = { ...state.counts, enrichedDone: ev.done ?? state.counts.enrichedDone };
+      const ticker = `Advertiser details ${ev.done}/${ev.total} — ${ev.current || ''}`;
+      if (i == null) return { ...state, phaseInfo, counts, ticker };
       const businesses = state.businesses.slice();
       businesses[i] = { ...businesses[i], ...ev.patch };
-      return { ...state, businesses, phaseInfo, counts };
+      return { ...state, businesses, phaseInfo, counts, ticker };
     }
-
-    case 'business_owner': {
-      const i = state.index[ev.business_key];
-      const phaseInfo = { ...state.phaseInfo, owners: { done: ev.done ?? state.phaseInfo.owners.done, total: ev.total ?? state.phaseInfo.owners.total } };
-      const counts = { ...state.counts, ownersDone: ev.done ?? state.counts.ownersDone };
-      const hunter = ev.hunter ?? state.hunter;
-      if (i == null) return { ...state, phaseInfo, counts, hunter };
-      const businesses = state.businesses.slice();
-      businesses[i] = { ...businesses[i], ...ev.patch };
-      return { ...state, businesses, phaseInfo, counts, hunter };
-    }
-
-    case 'contact_progress':
-      return { ...state, ticker: `Contacts ${ev.done}/${ev.total} — ${ev.current || ''}` };
-
-    case 'owner_progress':
-      return { ...state, ticker: `Owner lookup ${ev.done}/${ev.total} — ${ev.current || ''}` };
 
     case 'error':
       return { ...state, errors: state.errors.concat([{ scope: ev.scope, message: ev.message, ts: ev.ts }]).slice(-200) };
@@ -137,8 +143,7 @@ export function reducer(state, ev) {
         status: ev.status || 'finished',
         phase: 'done',
         counts: ev.counts || state.counts,
-        dbStats: ev.dbStats || state.dbStats,
-        hunter: ev.hunter || state.hunter,
+        saveResult: ev.saveResult || state.saveResult,
         exportReady: true,
         ticker: ev.status === 'stopped' ? 'Stopped' : ev.status === 'error' ? `Error: ${ev.message || ''}` : 'Complete',
       };
@@ -148,7 +153,7 @@ export function reducer(state, ev) {
 
     // Back to the empty dashboard, ready for a new search.
     case '__reset__':
-      return { ...initialState, businesses: [], index: {}, errors: [], notices: [] };
+      return { ...initialState };
 
     default:
       return state;
@@ -156,7 +161,12 @@ export function reducer(state, ev) {
 }
 
 function phaseLabel(p) {
-  return { harvesting: 'Harvesting ads', contacts: 'Fetching Facebook contacts', owners: 'Finding owners', done: 'Done' }[p] || p;
+  return {
+    harvesting: 'Harvesting ads',
+    enriching: 'Fetching advertiser details',
+    saving: 'Saving to library',
+    done: 'Done',
+  }[p] || p;
 }
 
 export function subscribeToRun(runId, onEvent) {
@@ -166,8 +176,7 @@ export function subscribeToRun(runId, onEvent) {
   // listed here or it is silently dropped.
   const types = [
     'run_started', 'phase_started', 'phase_done', 'harvest_progress',
-    'business_added', 'business_updated', 'business_enriched', 'business_owner',
-    'contact_progress', 'owner_progress', 'hunter_state',
+    'business_added', 'business_updated', 'business_enriched', 'ad_rejected',
     'error', 'notice', 'run_finished',
   ];
   for (const t of types) es.addEventListener(t, handler);

@@ -2,7 +2,7 @@ import { ChevronDown } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 // Compact searchable multi-select with chips. `options` = [{value,label,disabled?}].
-export default function MultiSelect({ options, value, onChange, placeholder = 'Select…', searchable = true }) {
+export default function MultiSelect({ options, value, onChange, placeholder = 'Select…', searchable = true, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const ref = useRef(null);
