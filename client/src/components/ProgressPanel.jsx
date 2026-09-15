@@ -22,7 +22,7 @@ export default function ProgressPanel({ state }) {
   const [tab, setTab] = useState(null);   // 'errors' | 'rejected' | null
   const cur = ORDER[state.phase] ?? -1;
   const done = state.status === 'finished' || state.status === 'stopped' || state.status === 'error';
-  const enrichOn = state.filters?.deepEnrich;
+  const enrichOn = state.filters?.enrichAdvertisers !== false;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

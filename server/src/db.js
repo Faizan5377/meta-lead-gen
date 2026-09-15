@@ -14,7 +14,8 @@ import { config } from './config.js';
 const BUSINESS_COLUMNS = [
   'page_id', 'library_id', 'page_name', 'page_url', 'page_categories',
   'page_profile_picture_url',
-  'followers_facebook', 'followers_instagram', 'instagram_handle',
+  'followers_facebook', 'followers_instagram', 'instagram_handle', 'facebook_handle',
+  'page_category', 'advertiser_bio', 'page_created_on',
   'platforms', 'ads_running', 'collation_id', 'ad_url',
   'is_active', 'start_date', 'end_date', 'days_running',
   'cta_text', 'cta_type', 'title', 'body_text', 'link_url', 'display_domain',

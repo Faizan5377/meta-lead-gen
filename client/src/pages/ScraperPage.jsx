@@ -12,7 +12,7 @@ const DEFAULT_FILTERS = {
   keywords: [], matchType: 'keyword_unordered', countries: ['US'], adType: 'all',
   activeStatus: 'active', mediaType: 'all', platforms: [], languages: [],
   startDateMin: '', startDateMax: '', sort: 'impressions', target: 100,
-  relevanceEnabled: true, nicheTerms: [], deepEnrich: false,
+  relevanceEnabled: true, nicheTerms: [], enrichAdvertisers: true,
 };
 
 const LAST_RUN_KEY = 'adharvester:lastRunId';

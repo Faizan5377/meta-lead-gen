@@ -180,6 +180,10 @@ function mergeKeptAd(existing, rec) {
   const keep = {
     followers_instagram: existing.followers_instagram,
     instagram_handle: existing.instagram_handle,
+    facebook_handle: existing.facebook_handle,
+    page_category: existing.page_category,
+    advertiser_bio: existing.advertiser_bio,
+    page_created_on: existing.page_created_on,
     relevance_score: existing.relevance_score,
     relevance_reason: existing.relevance_reason,
     business_key: existing.business_key, keywords: existing.keywords,

@@ -89,6 +89,10 @@ function normalizeFeedAd(r, groupSize) {
     followers_facebook: numOrNull(s.page_like_count),
     followers_instagram: null,
     instagram_handle: null,
+    facebook_handle: null,
+    page_category: null,
+    advertiser_bio: null,
+    page_created_on: null,
     page_profile_picture_url: s.page_profile_picture_url || null,
 
     // The platforms this ad actually runs on, straight from the feed.

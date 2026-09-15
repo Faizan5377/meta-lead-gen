@@ -245,7 +245,7 @@ export function normalizeFilters(body = {}) {
       platforms, languages, matchType, sort, startDateMin, startDateMax, target,
       advertiserIds: (Array.isArray(body.advertiserIds) ? body.advertiserIds : []).map(String).slice(0, 50),
       relevanceEnabled, nicheTerms, minRelevance,
-      deepEnrich: body.deepEnrich === true,
+      enrichAdvertisers: body.enrichAdvertisers !== false,
     },
     errors,
   };

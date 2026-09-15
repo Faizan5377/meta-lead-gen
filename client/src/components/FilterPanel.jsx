@@ -152,6 +152,17 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50" />
           </Field>
 
+          <Field label={<>Advertiser details <InfoTip text="Reads each advertiser's About tab for their Instagram handle and follower count, which Meta's feed doesn't include. On by default. Turning it off makes runs much faster but leaves Instagram columns empty." /></>}>
+            <label className="flex h-[38px] cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 shadow-sm">
+              <input
+                type="checkbox" checked={filters.enrichAdvertisers} disabled={running}
+                onChange={(e) => set({ enrichAdvertisers: e.target.checked })}
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400"
+              />
+              <span className="text-sm text-slate-600">Instagram followers</span>
+            </label>
+          </Field>
+
           {/* ── Niche relevance ── */}
           <div className="sm:col-span-2 lg:col-span-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
@@ -176,16 +187,6 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
                       disabled={running} placeholder="Add related terms…"
                     />
                   </Field>
-                  <Field label={<>Advertiser details <InfoTip text="Opens each advertiser's ad-details panel for their Instagram handle and follower count, which the feed doesn't include. Accurate but much slower — roughly a page load per advertiser." /></>}>
-                    <label className="flex h-[38px] cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 shadow-sm">
-                      <input
-                        type="checkbox" checked={filters.deepEnrich} disabled={running}
-                        onChange={(e) => set({ deepEnrich: e.target.checked })}
-                        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400"
-                      />
-                      <span className="text-sm text-slate-600">Fetch Instagram followers (slower)</span>
-                    </label>
-                  </Field>
                 </div>
               )}
             </div>
@@ -208,7 +209,7 @@ function countActive(f, meta) {
   if (f.languages.length) n++;
   if (f.startDateMin || f.startDateMax) n++;
   if (f.nicheTerms?.length) n++;
-  if (f.deepEnrich) n++;
+  if (!f.enrichAdvertisers) n++;
   if (!f.relevanceEnabled) n++;
   return n;
 }

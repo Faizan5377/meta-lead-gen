@@ -33,7 +33,7 @@ export async function runPipeline(runId) {
 
   try {
     await harvestPhase(run);
-    if (!run.cancelRequested && run.filters.deepEnrich) await enrichPhase(run);
+    if (!run.cancelRequested && run.filters.enrichAdvertisers !== false) await enrichPhase(run);
     await savePhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
@@ -114,19 +114,20 @@ async function harvestPhase(run) {
   });
 }
 
-// ── Phase 2: advertiser details (optional) ───────────────────────────────────
-// The feed carries Facebook followers but not Instagram; those only exist in the
-// ad-details panel, which costs a page visit per advertiser. Off by default.
+// ── Phase 2: advertiser details ──────────────────────────────────────────────
+// The feed carries Facebook followers but not Instagram, so every advertiser's
+// About tab is read for the Instagram handle + follower count (plus page age and
+// bio). One page load per advertiser, which is why it runs concurrently.
 async function enrichPhase(run) {
   run.phase = 'enriching';
-  const targets = run.businesses.filter((b) => b.library_id);
+  const targets = run.businesses.filter((b) => b.page_id);
   emit(run.id, { type: 'phase_started', phase: 'enriching', total: targets.length });
   if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'enriching', done: 0 }); return; }
 
   await runPool(targets, config.enrichConcurrency, run, async (page, biz) => {
     let patch;
     try {
-      patch = await scrapeAdvertiserDetails(page, biz.library_id);
+      patch = await scrapeAdvertiserDetails(page, biz.page_id, biz.country);
     } catch (err) {
       patch = {};
       run.errors.push({ scope: 'enrich', business: biz.page_name, message: err.message, ts: now() });

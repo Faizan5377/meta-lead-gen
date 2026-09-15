@@ -120,3 +120,9 @@ create index if not exists ads_run_idx on public.ads (run_id);
 alter table public.ads      enable row level security;
 alter table public.seen_ads enable row level security;
 alter table public.runs     enable row level security;
+
+-- Advertiser "About" tab details (added after first release).
+alter table public.ads add column if not exists facebook_handle  text;
+alter table public.ads add column if not exists page_category    text;
+alter table public.ads add column if not exists advertiser_bio   text;
+alter table public.ads add column if not exists page_created_on  text;

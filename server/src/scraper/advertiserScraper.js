@@ -1,21 +1,28 @@
-// Optional per-advertiser enrichment.
+// Per-advertiser details from the Ad Library's advertiser "About" tab.
 //
 // The feed gives us Facebook followers (`page_like_count`) but nothing about
-// Instagram. Those only appear in the ad's "About the advertiser" panel:
+// Instagram. Both live on the advertiser's own About tab, which is reachable
+// directly by page id — no ad-details modal, no overlay fighting:
 //
-//   Everything Envy
-//     f  @everythingenvy   118.7K followers · Digital creator
-//     ig @everythingenvy   1.8M followers
+//   /ads/library/?view_all_page_id=<PAGE_ID>&search_type=page&country=<CC>
 //
-// Reaching it costs one page load per advertiser, which is why this phase is
-// opt-in rather than part of every run.
+//   Pages and accounts
+//   @DelmarPestControl
+//   430 followers
+//   •
+//   Pest control service
+//   @delmarpestcontrol
+//   3 followers
 //
-// Never throws: a business that can't be enriched simply keeps what the feed
+// It also carries the page creation date and the advertiser's own bio, both of
+// which are useful qualifying signals, so we take them while we're here.
+//
+// Never throws: an advertiser that can't be read simply keeps whatever the feed
 // already gave us.
 
 import { jitter } from './humanize.js';
 
-// "118.7K followers" / "1.8M followers" / "531 followers" -> number
+// "118.7K followers" / "1.8M" / "430" -> number
 export function parseFollowerCount(raw) {
   if (!raw) return null;
   const m = String(raw).replace(/,/g, '').match(/([\d.]+)\s*([KMB])?/i);
@@ -26,81 +33,93 @@ export function parseFollowerCount(raw) {
   return Math.round(n * mult);
 }
 
-// The panel renders each platform as an icon + handle + "N followers". We read
-// it by locating the handle lines and the follower line that follows each.
-export function parseAdvertiserPanel(text) {
+const HANDLE_RE = /^@[\w.]+$/;
+const FOLLOWERS_RE = /^([\d.,]+\s*[KMB]?)\s*followers?$/i;
+
+// Meta renders the Facebook account first, then Instagram. Each handle line is
+// followed by a followers line, optionally then "•" and the page category —
+// each on its own line, which is why this walks lines rather than regexing one.
+export function parseAboutTab(text) {
   const out = {
     followers_facebook: null,
     followers_instagram: null,
-    instagram_handle: null,
     facebook_handle: null,
+    instagram_handle: null,
     page_category: null,
     advertiser_bio: null,
+    page_created_on: null,
   };
   if (!text) return out;
 
   const lines = String(text).split('\n').map((l) => l.trim()).filter(Boolean);
 
-  // Each "@handle" line is followed by a "N followers · Category" line.
-  const handles = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^@[\w.]+$/.test(lines[i])) continue;
-    const next = lines[i + 1] || '';
-    const fm = next.match(/([\d.,]+\s*[KMB]?)\s*followers?/i);
-    handles.push({
-      handle: lines[i].slice(1),
-      followers: fm ? parseFollowerCount(fm[1]) : null,
-      // "118.7K followers • Digital creator"
-      category: (next.split(/[•·]/)[1] || '').trim() || null,
-    });
+  const start = lines.findIndex((l) => /^Pages and accounts$/i.test(l));
+  const end = lines.findIndex((l) => /^Page history$/i.test(l));
+  const block = start >= 0 ? lines.slice(start + 1, end > start ? end : undefined) : lines;
+
+  const accounts = [];
+  for (let i = 0; i < block.length; i++) {
+    if (!HANDLE_RE.test(block[i])) continue;
+    const handle = block[i].slice(1);
+    let followers = null;
+    let category = null;
+    // Look a few lines ahead for the follower count and the category.
+    for (let j = i + 1; j < Math.min(i + 5, block.length); j++) {
+      if (HANDLE_RE.test(block[j])) break;                 // next account
+      const fm = block[j].match(FOLLOWERS_RE);
+      if (fm && followers === null) { followers = parseFollowerCount(fm[1]); continue; }
+      if (block[j] === '•') continue;
+      if (followers !== null && !category) category = block[j];
+    }
+    accounts.push({ handle, followers, category });
   }
 
-  // Meta renders Facebook first, then Instagram.
-  if (handles[0]) {
-    out.facebook_handle = handles[0].handle;
-    out.followers_facebook = handles[0].followers;
-    out.page_category = handles[0].category;
+  if (accounts[0]) {
+    out.facebook_handle = accounts[0].handle;
+    out.followers_facebook = accounts[0].followers;
+    out.page_category = accounts[0].category;
   }
-  if (handles[1]) {
-    out.instagram_handle = handles[1].handle;
-    out.followers_instagram = handles[1].followers;
+  if (accounts[1]) {
+    out.instagram_handle = accounts[1].handle;
+    out.followers_instagram = accounts[1].followers;
   }
 
-  const more = lines.findIndex((l) => /^more info$/i.test(l));
-  if (more >= 0 && lines[more + 1]) out.advertiser_bio = lines[more + 1].slice(0, 300);
+  // The bio sits just above "Pages and accounts".
+  if (start > 0) {
+    const bio = lines[start - 1];
+    if (bio && !/transparency/i.test(bio) && bio.length > 15) out.advertiser_bio = bio.slice(0, 400);
+  }
+
+  const created = lines.find((l) => /^Page created on /i.test(l));
+  if (created) out.page_created_on = created.replace(/^Page created on\s*/i, '').trim();
 
   return out;
 }
 
-const PANEL_TEXT = `
+const READ_ABOUT = `
 (() => {
-  const heads = Array.from(document.querySelectorAll('div,span,h2,h3'))
-    .filter(el => /^About the advertiser$/i.test((el.textContent || '').trim()));
-  for (const h of heads) {
-    let n = h;
-    for (let i = 0; i < 6 && n; i++) {
-      n = n.parentElement;
-      const t = (n?.innerText || '');
-      if (/@/.test(t) && /follower/i.test(t)) return t;
-    }
-  }
-  return document.body?.innerText || '';
+  const t = document.body?.innerText || '';
+  return t;
 })()
 `;
 
-// Open one ad's detail view and read the advertiser panel.
-export async function scrapeAdvertiserDetails(page, libraryId) {
-  if (!libraryId) return {};
-  const url = `https://www.facebook.com/ads/library/?id=${libraryId}`;
+// Read one advertiser's About tab. `pageId` is the numeric Facebook page id.
+export async function scrapeAdvertiserDetails(page, pageId, country = 'US') {
+  if (!pageId) return {};
+
+  const url = 'https://www.facebook.com/ads/library/?'
+    + `active_status=all&ad_type=all&media_type=all&search_type=page`
+    + `&country=${encodeURIComponent(country || 'US')}`
+    + `&view_all_page_id=${encodeURIComponent(pageId)}`;
 
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
   } catch {
     if (!page.url().includes('facebook.com')) return {};
   }
-  await jitter(1500, 2400);
+  await jitter(1800, 2600);
 
-  // Dismiss the login modal if it appears.
+  // Dismiss the login modal if it appeared.
   for (const sel of ['div[role="dialog"] [aria-label="Close"]', '[aria-label="Close"]']) {
     const btn = page.locator(sel).first();
     if (await btn.count().then((c) => c > 0).catch(() => false)) {
@@ -109,23 +128,24 @@ export async function scrapeAdvertiserDetails(page, libraryId) {
   }
   await page.keyboard.press('Escape').catch(() => {});
 
-  // "See ad details" opens the panel; on a single-ad URL it may already be open.
-  const detail = page.getByText(/^See ad details$/i).first();
-  if (await detail.count().then((c) => c > 0).catch(() => false)) {
-    try { await detail.click({ timeout: 2500 }); await jitter(1400, 2200); } catch {}
-  }
+  // Switch to the About tab. Dispatching on the node avoids Meta's invisible
+  // overlays, which intercept a real pointer click.
+  const opened = await page.evaluate(() => {
+    const el = Array.from(document.querySelectorAll('div[role="tab"], a, span, div'))
+      .find((e) => /^About$/.test((e.textContent || '').trim()));
+    if (!el) return false;
+    el.click();
+    return true;
+  }).catch(() => false);
+  if (!opened) return {};
 
-  // The "About the advertiser" accordion is collapsed by default.
-  const about = page.getByText(/^About the advertiser$/i).first();
-  if (await about.count().then((c) => c > 0).catch(() => false)) {
-    try { await about.click({ timeout: 2000 }); await jitter(900, 1500); } catch {}
-  }
+  await jitter(1600, 2400);
 
-  const text = await page.evaluate(PANEL_TEXT).catch(() => '');
-  const parsed = parseAdvertiserPanel(text);
+  const text = await page.evaluate(READ_ABOUT).catch(() => '');
+  const parsed = parseAboutTab(text);
 
-  // Only return fields we actually found, so enrichment never blanks out data
-  // the feed already supplied.
+  // Only return what we actually found, so enrichment never blanks out data the
+  // feed already supplied.
   const patch = {};
   for (const [k, v] of Object.entries(parsed)) if (v !== null && v !== undefined) patch[k] = v;
   return patch;

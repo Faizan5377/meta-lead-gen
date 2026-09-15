@@ -22,6 +22,30 @@ function Platforms({ list }) {
   );
 }
 
+// Both platforms in one column, each ALWAYS shown with a dash when missing.
+// Two separate columns wasted horizontal space, and hiding a missing value made
+// it look like the figure didn't exist rather than simply not being fetched —
+// Instagram counts aren't in Meta's feed, so they're blank unless the optional
+// advertiser-details enrichment ran.
+function Followers({ fb, ig }) {
+  const Row = ({ label, value, tone, hint }) => (
+    <div className="flex items-baseline justify-end gap-1.5 leading-tight" title={hint}>
+      <span className={`text-[9px] font-semibold uppercase ${tone}`}>{label}</span>
+      {value != null
+        ? <span className="tabular text-slate-700">{formatFollowers(value)}</span>
+        : <span className="text-slate-300">—</span>}
+    </div>
+  );
+  return (
+    <div className="space-y-0.5 text-right text-xs">
+      <Row label="fb" value={fb} tone="text-blue-500"
+        hint={fb != null ? `Facebook: ${Number(fb).toLocaleString()} followers` : 'No Facebook follower count for this page'} />
+      <Row label="ig" value={ig} tone="text-pink-500"
+        hint={ig != null ? `Instagram: ${Number(ig).toLocaleString()} followers` : 'Instagram followers aren’t in Meta’s feed — enable “Fetch Instagram followers” in Filters to collect them'} />
+    </div>
+  );
+}
+
 // Days running is the headline signal: a long-running ad is a proven ad.
 function Duration({ days }) {
   if (days == null) return <span className="text-slate-300">—</span>;
@@ -116,16 +140,7 @@ export default function ResultsTable({ businesses, compact = false }) {
                     : (b.ads_running ?? 1)}
                 </td>
                 <td className="px-3 py-2.5"><Platforms list={b.platforms} /></td>
-                <td className="px-3 py-2.5 text-right">
-                  <div className="tabular text-slate-700" title={`Facebook: ${b.followers_facebook ?? '—'}`}>
-                    {b.followers_facebook != null ? formatFollowers(b.followers_facebook) : <span className="text-slate-300">—</span>}
-                  </div>
-                  {b.followers_instagram != null && (
-                    <div className="tabular text-[11px] text-pink-500" title={`Instagram: ${b.followers_instagram}`}>
-                      {formatFollowers(b.followers_instagram)} ig
-                    </div>
-                  )}
-                </td>
+                <td className="px-3 py-2.5"><Followers fb={b.followers_facebook} ig={b.followers_instagram} /></td>
                 <td className="max-w-[150px] px-3 py-2.5">
                   <span className="truncate text-slate-600" title={(b.page_categories || []).join(', ')}>
                     {(b.page_categories || [])[0] || <span className="text-slate-300">—</span>}
