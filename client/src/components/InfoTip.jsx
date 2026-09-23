@@ -11,7 +11,7 @@ export default function InfoTip({ text, side = 'top' }) {
           type="button"
           tabIndex={-1}
           aria-label="More information"
-          className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-slate-400 transition-colors hover:text-brand-500"
+          className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-slate-400 dark:text-slate-500 transition-colors hover:text-brand-500"
         >
           <Info size={13} strokeWidth={2.4} />
         </button>

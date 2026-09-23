@@ -65,3 +65,16 @@ body {
   .odo-strip { transition-duration: 0.001ms !important; }
   *, *::before, *::after { animation-duration: 0.001ms !important; }
 }
+
+/* ── Dark theme ────────────────────────────────────────────────────────────
+   Toggled by the `dark` class on <html> (Tailwind darkMode: 'class').
+   Only the few global surfaces live here; components use dark: variants. */
+html.dark { color-scheme: dark; }
+html.dark body { background: #0b1220; color: #e2e8f0; }
+
+/* Form controls need explicit dark styling — the browser default ignores
+   Tailwind and renders a white calendar/number widget. */
+html.dark input[type="date"],
+html.dark input[type="number"],
+html.dark input[type="text"],
+html.dark input:not([type]) { color-scheme: dark; }

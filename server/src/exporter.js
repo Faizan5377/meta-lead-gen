@@ -93,3 +93,43 @@ export function csvFilename(run) {
 export function libraryFilename() {
   return `meta-ads_library_${stamp(new Date().toISOString())}.csv`;
 }
+
+// ── Google Maps places ──────────────────────────────────────────────────────
+const PLACE_COLUMNS = [
+  'name', 'category', 'rating', 'review_count', 'phone', 'phone_e164',
+  'website', 'website_domain', 'address', 'city', 'country',
+  'open_state', 'hours_today', 'latitude', 'longitude',
+  'maps_url', 'cid_url', 'categories', 'neighborhood', 'timezone',
+  'query', 'search_location', 'place_id', 'feature_id',
+];
+
+const PLACE_HEADERS = {
+  name: 'Business', category: 'Category', rating: 'Rating', review_count: 'Reviews',
+  phone: 'Phone', phone_e164: 'Phone (E.164)', website: 'Website',
+  website_domain: 'Domain', address: 'Address', city: 'City', country: 'Country',
+  open_state: 'Open Now', hours_today: 'Hours Today', latitude: 'Latitude',
+  longitude: 'Longitude', maps_url: 'Google Maps', cid_url: 'CID Link',
+  categories: 'All Categories', neighborhood: 'Neighbourhood', timezone: 'Timezone',
+  query: 'Search Term', search_location: 'Search Location',
+  place_id: 'Place ID', feature_id: 'Feature ID',
+};
+
+export function exportPlaces(rows) {
+  const prepared = rows.slice()
+    .sort((a, b) => (b.review_count || 0) - (a.review_count || 0))
+    .map((p) => ({
+      ...p,
+      // Flatten today's opening hours to one readable cell.
+      hours_today: p.hours && typeof p.hours === 'object'
+        ? Object.entries(p.hours).map(([d, h]) => `${d}: ${h}`).join('; ')
+        : null,
+    }));
+  const lines = [PLACE_COLUMNS.map((c) => csvEscape(PLACE_HEADERS[c] || c)).join(',')];
+  for (const r of prepared) lines.push(PLACE_COLUMNS.map((c) => csvEscape(r[c])).join(','));
+  return BOM + lines.join('\r\n') + '\r\n';
+}
+
+export function placesFilename(run) {
+  const q = (run?.filters?.queries || ['places']).join('-').replace(/[^a-z0-9]+/gi, '_').slice(0, 40);
+  return `google-maps_${q || 'places'}_${stamp(run?.finishedAt || new Date().toISOString())}.csv`;
+}

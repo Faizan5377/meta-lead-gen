@@ -58,6 +58,17 @@ export const config = {
     enabled: bool(process.env.SUPABASE_ENABLED, true),
   },
 
+  // Google Maps scraper.
+  maps: {
+    maxTarget: num(process.env.MAPS_MAX_TARGET, 2500),
+    defaultTarget: num(process.env.MAPS_DEFAULT_TARGET, 100),
+    // Scrolling the results rail is how Maps paginates.
+    scrollSettleMs: num(process.env.MAPS_SCROLL_SETTLE_MS, 1600),
+    stableScrollsToStop: num(process.env.MAPS_STABLE_SCROLLS, 4),
+    maxQueryMs: num(process.env.MAPS_MAX_QUERY_MS, 10 * 60 * 1000),
+    maxRunMs: num(process.env.MAPS_MAX_RUN_MS, 60 * 60 * 1000),
+  },
+
   dbPath: process.env.DB_PATH || path.resolve(__dirname, '../data/leads.db'),
 
   storageState: process.env.STORAGE_STATE && fs.existsSync(process.env.STORAGE_STATE)

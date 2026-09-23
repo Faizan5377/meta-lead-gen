@@ -126,3 +126,79 @@ alter table public.ads add column if not exists facebook_handle  text;
 alter table public.ads add column if not exists page_category    text;
 alter table public.ads add column if not exists advertiser_bio   text;
 alter table public.ads add column if not exists page_created_on  text;
+
+-- ── Google Maps places ──────────────────────────────────────────────────────
+-- One row per business. feature_id is Google's stable internal id and is the
+-- dedup key, so a repeat search never resurfaces a place already collected.
+create table if not exists public.places (
+  feature_id      text primary key,
+  place_id        text,
+  knowledge_id    text,
+  name            text,
+
+  address         text,
+  street          text,
+  city            text,
+  neighborhood    text,
+  country         text,
+  timezone        text,
+  latitude        double precision,
+  longitude       double precision,
+
+  category        text,
+  categories      text[] default '{}',
+
+  rating          double precision,
+  review_count    integer,
+
+  phone           text,
+  phone_e164      text,
+  website         text,
+  website_domain  text,
+
+  hours           jsonb,
+  open_state      text,
+  photo_url       text,
+  owner_name      text,
+  maps_url        text,
+  cid_url         text,
+
+  query           text,
+  search_location text,
+
+  run_id          uuid,
+  first_seen_at   timestamptz default now(),
+  last_updated_at timestamptz default now()
+);
+
+create index if not exists places_place_id_idx   on public.places (place_id);
+create index if not exists places_name_idx       on public.places (name);
+create index if not exists places_city_idx       on public.places (city);
+create index if not exists places_category_idx   on public.places (category);
+create index if not exists places_rating_idx     on public.places (rating desc);
+create index if not exists places_reviews_idx    on public.places (review_count desc);
+create index if not exists places_run_idx        on public.places (run_id);
+create index if not exists places_first_seen_idx on public.places (first_seen_at desc);
+create index if not exists places_cats_gin       on public.places using gin (categories);
+
+create table if not exists public.place_runs (
+  id               uuid primary key,
+  name             text,
+  seq              integer,
+  queries          text[] default '{}',
+  locations        text[] default '{}',
+  filters          jsonb,
+  target           integer,
+  status           text,
+  kept             integer default 0,
+  found            integer default 0,
+  skipped_known    integer default 0,
+  skipped_filtered integer default 0,
+  started_at       timestamptz,
+  finished_at      timestamptz,
+  created_at       timestamptz default now()
+);
+create index if not exists place_runs_created_idx on public.place_runs (created_at desc);
+
+alter table public.places     enable row level security;
+alter table public.place_runs enable row level security;

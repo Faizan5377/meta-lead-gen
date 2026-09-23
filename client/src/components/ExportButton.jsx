@@ -21,7 +21,7 @@ export default function ExportButton({ href, ready, label = 'Export CSV' }) {
       onClick={download}
       disabled={!ready}
       title={ready ? 'Download as CSV' : 'Available once the run completes'}
-      className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+      className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700"
     >
       <Download size={15} /> {label}
     </button>

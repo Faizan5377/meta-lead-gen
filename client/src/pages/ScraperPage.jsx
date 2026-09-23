@@ -103,23 +103,23 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
 
   return (
     <>
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 lg:px-7">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-5 py-4 lg:px-7">
         <div>
           <h1 className="text-xl font-semibold">Scraper</h1>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-slate-400 dark:text-slate-500">
             Search the Meta Ad Library, filter to your niche, and collect only advertisers you don’t already have.
           </p>
         </div>
         <div className="flex items-center gap-2">
           {state.runId && !running && (
             <button onClick={onNewSearch}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:border-slate-300">
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 shadow-sm transition hover:border-slate-300 dark:hover:border-slate-600">
               <Plus size={13} /> New search
             </button>
           )}
           {state.runId && (
             <button onClick={onRefresh} disabled={refreshing}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:border-slate-300 disabled:opacity-50">
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 shadow-sm transition hover:border-slate-300 dark:hover:border-slate-600 disabled:opacity-50">
               <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} /> Refresh
             </button>
           )}
@@ -155,19 +155,19 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
 
 function EmptyState({ stats, onGoToLibrary }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 px-6 py-16 text-center">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-500">
+    <div className="rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 bg-white/60 dark:bg-slate-900/60 px-6 py-16 text-center">
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-50 dark:bg-brand-950/40 text-brand-500">
         <Radar size={22} />
       </div>
-      <div className="text-sm font-semibold text-slate-700">Add a keyword and start a search</div>
-      <div className="mx-auto mt-1.5 max-w-xl text-xs leading-relaxed text-slate-400">
+      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Add a keyword and start a search</div>
+      <div className="mx-auto mt-1.5 max-w-xl text-xs leading-relaxed text-slate-400 dark:text-slate-500">
         Every advertiser is captured once, with its longest-running ad, how many ads it’s running,
         the platforms it runs on and follower counts. Ads outside your niche are filtered out, and
         anything already in your library is skipped — so each run returns only new businesses.
       </div>
       {stats?.total > 0 && (
         <button onClick={onGoToLibrary}
-          className="mt-4 text-xs font-medium text-brand-600 hover:underline">
+          className="mt-4 text-xs font-medium text-brand-600 dark:text-brand-400 hover:underline">
           You already have {Number(stats.total).toLocaleString()} ads — open your library →
         </button>
       )}

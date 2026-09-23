@@ -7,7 +7,7 @@ function HeroTile({ label, value, sub, icon: Icon }) {
     <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-brand-600 to-brand-950 p-4 text-white shadow-sm">
       <div className="flex items-start justify-between">
         <span className="text-[11px] font-medium uppercase tracking-wide text-white/70">{label}</span>
-        <span aria-hidden className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15">
+        <span aria-hidden className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 dark:bg-white/10">
           <ArrowUpRight size={14} />
         </span>
       </div>
@@ -21,14 +21,14 @@ function HeroTile({ label, value, sub, icon: Icon }) {
 
 function Tile({ label, value, raw, icon: Icon, tint, title }) {
   return (
-    <div className="card-lift relative rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" title={title}>
+    <div className="card-lift relative rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4 shadow-sm" title={title}>
       <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${tint}`}>
         <Icon size={16} strokeWidth={2} />
       </div>
-      <div className="mt-3 text-2xl font-semibold leading-none text-slate-800">
+      <div className="mt-3 text-2xl font-semibold leading-none text-slate-800 dark:text-slate-100">
         {raw ?? <AnimatedNumber value={value} />}
       </div>
-      <div className="mt-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="mt-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">{label}</div>
     </div>
   );
 }

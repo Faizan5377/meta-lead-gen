@@ -19,8 +19,10 @@ import Fastify from 'fastify';
 import { config } from './config.js';
 import { bus } from './eventStream.js';
 import { FILTER_META, normalizeFilters } from './filters.js';
-import { csvFilename, exportRows, exportRun, libraryFilename } from './exporter.js';
+import { csvFilename, exportPlaces, exportRows, exportRun, libraryFilename, placesFilename } from './exporter.js';
 import { library } from './library.js';
+import { placesLibrary } from './maps/library.js';
+import * as maps from './maps/orchestrator.js';
 import { runPipeline, stopRun } from './orchestrator.js';
 import { shutdown } from './scraper/engine.js';
 import { store } from './store.js';
@@ -29,6 +31,7 @@ const app = Fastify({ logger: { level: 'info' } });
 await app.register(cors, { origin: true });
 
 await library.init();
+await placesLibrary.init();
 
 app.get('/api/health', async () => ({ ok: true, ts: new Date().toISOString() }));
 app.get('/api/filters', async () => FILTER_META);
@@ -181,6 +184,125 @@ app.get('/api/runs/:id/export', async (req, reply) => {
     .header('Content-Type', 'text/csv; charset=utf-8')
     .header('Content-Disposition', `attachment; filename="${csvFilename(run)}"`)
     .send(exportRun(run));
+});
+
+// ── Google Maps ─────────────────────────────────────────────────────────────
+const MAPS_LIMITS = {
+  maxTarget: config.maps.maxTarget,
+  defaultTarget: config.maps.defaultTarget,
+};
+
+// Coerce the request body into a validated Maps filter set.
+function normalizeMapsFilters(body = {}) {
+  const errors = [];
+  const list = (v, cap) => (Array.isArray(v) ? v : String(v ?? '').split(/[,;\n]/))
+    .map((s) => String(s).trim()).filter(Boolean)
+    .filter((x, i, a) => a.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i)
+    .slice(0, cap);
+
+  const queries = list(body.queries ?? body.query, 25);
+  if (!queries.length) errors.push('At least one search term is required');
+  const locations = list(body.locations ?? body.location, 25);
+
+  const target = Math.max(1, Math.min(MAPS_LIMITS.maxTarget, Number(body.target) || MAPS_LIMITS.defaultTarget));
+
+  return {
+    filters: {
+      queries, locations, target,
+      language: String(body.language || 'en').slice(0, 5),
+      region: String(body.region || 'us').slice(0, 5),
+      requirePhone: body.requirePhone === true,
+      requireWebsite: body.requireWebsite === true,
+      minRating: Math.max(0, Math.min(5, Number(body.minRating) || 0)),
+      minReviews: Math.max(0, Number(body.minReviews) || 0),
+    },
+    errors,
+  };
+}
+
+app.get('/api/maps/limits', async () => MAPS_LIMITS);
+app.get('/api/maps/library/stats', async () => placesLibrary.stats());
+
+app.post('/api/maps/runs', async (req, reply) => {
+  const { filters, errors } = normalizeMapsFilters(req.body || {});
+  if (errors.length) return reply.code(400).send({ error: errors.join('; '), errors });
+  const run = maps.createRun(filters);
+  try {
+    const { name, seq } = await placesLibrary.nameRun(filters);
+    run.name = name; run.seq = seq;
+  } catch { run.name = filters.queries.join(', '); }
+  return { runId: run.id, snapshot: maps.snapshot(run) };
+});
+
+app.post('/api/maps/runs/:id/start', async (req, reply) => {
+  const run = maps.getRun(req.params.id);
+  if (!run) return reply.code(404).send({ error: 'run not found' });
+  if (run.status === 'running') return reply.code(409).send({ error: 'already running' });
+  maps.runPipeline(run.id).catch((err) => app.log.error(err, 'maps pipeline failed'));
+  return { ok: true };
+});
+
+app.post('/api/maps/runs/:id/stop', async (req, reply) => {
+  if (!maps.stopRun(req.params.id)) return reply.code(404).send({ error: 'run not found' });
+  return { ok: true };
+});
+
+app.get('/api/maps/runs/:id', async (req, reply) => {
+  const run = maps.getRun(req.params.id);
+  if (!run) return reply.code(404).send({ error: 'run not found' });
+  return maps.snapshot(run);
+});
+
+app.get('/api/maps/runs/:id/events', (req, reply) => {
+  const run = maps.getRun(req.params.id);
+  if (!run) { reply.code(404).send({ error: 'run not found' }); return; }
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive', 'X-Accel-Buffering': 'no',
+  });
+  reply.raw.write(`: connected ${new Date().toISOString()}\n\n`);
+  bus.subscribe(req.params.id, reply);
+  const hb = setInterval(() => { try { reply.raw.write(': ping\n\n'); } catch {} }, 20000);
+  reply.raw.on('close', () => clearInterval(hb));
+});
+
+app.get('/api/maps/runs/:id/export', async (req, reply) => {
+  const run = maps.getRun(req.params.id);
+  if (!run) return reply.code(404).send({ error: 'run not found' });
+  if (run.status === 'running' || run.status === 'idle') {
+    return reply.code(409).send({ error: 'run not finished yet' });
+  }
+  reply.header('Content-Type', 'text/csv; charset=utf-8')
+    .header('Content-Disposition', `attachment; filename="${placesFilename(run)}"`)
+    .send(exportPlaces(run.places));
+});
+
+// Maps library, organised by execution like the ad library.
+app.get('/api/maps/library/runs', async (req, reply) => {
+  try { return await placesLibrary.listRuns({ search: req.query.search }); }
+  catch (err) { return reply.code(500).send({ error: err.message }); }
+});
+app.get('/api/maps/library/runs/:id/places', async (req, reply) => {
+  try { return await placesLibrary.runPlaces(req.params.id); }
+  catch (err) { return reply.code(500).send({ error: err.message }); }
+});
+app.patch('/api/maps/library/runs/:id', async (req, reply) => {
+  const name = (req.body?.name || '').trim();
+  if (!name) return reply.code(400).send({ error: 'name is required' });
+  try { return await placesLibrary.renameRun(req.params.id, name); }
+  catch (err) { return reply.code(500).send({ error: err.message }); }
+});
+app.delete('/api/maps/library/runs/:id', async (req, reply) => {
+  try { return await placesLibrary.deleteRun(req.params.id); }
+  catch (err) { return reply.code(500).send({ error: err.message }); }
+});
+app.get('/api/maps/library/runs/:id/export', async (req, reply) => {
+  try {
+    const { rows } = await placesLibrary.runPlaces(req.params.id);
+    reply.header('Content-Type', 'text/csv; charset=utf-8')
+      .header('Content-Disposition', 'attachment; filename="google-maps_export.csv"')
+      .send(exportPlaces(rows));
+  } catch (err) { return reply.code(500).send({ error: err.message }); }
 });
 
 try {

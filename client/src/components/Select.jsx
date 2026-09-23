@@ -26,14 +26,14 @@ export default function Select({ options, value, onChange, placeholder = 'Select
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex min-h-[40px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-800 shadow-sm transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+        className="flex min-h-[40px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-left text-sm text-slate-800 dark:text-slate-100 shadow-sm transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:focus:ring-brand-900"
       >
-        <span className={`truncate ${current ? '' : 'text-slate-400'}`}>{current ? current.label : placeholder}</span>
-        <ChevronDown size={15} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <span className={`truncate ${current ? '' : 'text-slate-400 dark:text-slate-500'}`}>{current ? current.label : placeholder}</span>
+        <ChevronDown size={15} className={`shrink-0 text-slate-400 dark:text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
-        <div className="absolute z-40 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
+        <div className="absolute z-40 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-1 shadow-xl">
           {options.map((o) => {
             const active = o.value === value;
             return (
@@ -44,14 +44,14 @@ export default function Select({ options, value, onChange, placeholder = 'Select
                 onClick={() => pick(o)}
                 className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm ${
                   o.disabled
-                    ? 'cursor-not-allowed text-slate-300'
+                    ? 'cursor-not-allowed text-slate-300 dark:text-slate-600'
                     : active
-                      ? 'bg-brand-50 text-brand-700'
-                      : 'text-slate-700 hover:bg-slate-50'
+                      ? 'bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300'
+                      : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
                 }`}
               >
                 <span className="truncate">{o.label}{o.disabled && o.disabledHint ? ` — ${o.disabledHint}` : ''}</span>
-                {active && <Check size={14} className="shrink-0 text-brand-600" />}
+                {active && <Check size={14} className="shrink-0 text-brand-600 dark:text-brand-400" />}
               </button>
             );
           })}

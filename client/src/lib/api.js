@@ -42,3 +42,20 @@ export const api = {
   runExportUrlLibrary: (id) => `/api/library/runs/${id}/export`,
   clearLibrary: () => req('/api/library/clear', { method: 'POST' }),
 };
+
+// ── Google Maps ─────────────────────────────────────────────────────────────
+Object.assign(api, {
+  mapsLimits: () => req('/api/maps/limits'),
+  createMapsRun: (filters) => req('/api/maps/runs', { method: 'POST', body: JSON.stringify(filters) }),
+  startMapsRun: (id) => req(`/api/maps/runs/${id}/start`, { method: 'POST' }),
+  stopMapsRun: (id) => req(`/api/maps/runs/${id}/stop`, { method: 'POST' }),
+  mapsRun: (id) => req(`/api/maps/runs/${id}`),
+  mapsRunExportUrl: (id) => `/api/maps/runs/${id}/export`,
+
+  mapsStats: () => req('/api/maps/library/stats'),
+  mapsLibraryRuns: (search) => req(`/api/maps/library/runs?${toQuery({ search })}`),
+  mapsRunPlaces: (id) => req(`/api/maps/library/runs/${id}/places`),
+  renameMapsRun: (id, name) => req(`/api/maps/library/runs/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  deleteMapsRun: (id) => req(`/api/maps/library/runs/${id}`, { method: 'DELETE' }),
+  mapsLibraryExportUrl: (id) => `/api/maps/library/runs/${id}/export`,
+});

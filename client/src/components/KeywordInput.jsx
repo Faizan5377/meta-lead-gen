@@ -37,11 +37,11 @@ export default function KeywordInput({ value = [], onChange, max = 50, disabled 
   return (
     <div
       onClick={() => inputRef.current?.focus()}
-      className="flex min-h-[40px] w-full cursor-text flex-wrap items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm transition focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-100"
+      className="flex min-h-[40px] w-full cursor-text flex-wrap items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 shadow-sm transition focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-100"
     >
-      <Search size={15} className="shrink-0 text-slate-400" />
+      <Search size={15} className="shrink-0 text-slate-400 dark:text-slate-500" />
       {value.map((kw) => (
-        <span key={kw} className="inline-flex items-center gap-1 rounded-lg bg-brand-50 py-0.5 pl-2 pr-1 text-xs font-medium text-brand-700">
+        <span key={kw} className="inline-flex items-center gap-1 rounded-lg bg-brand-50 dark:bg-brand-950/40 py-0.5 pl-2 pr-1 text-xs font-medium text-brand-700 dark:text-brand-300">
           {kw}
           <button
             type="button"
@@ -66,10 +66,10 @@ export default function KeywordInput({ value = [], onChange, max = 50, disabled 
           if (/[,;\n\t]/.test(text)) { e.preventDefault(); add(text); }
         }}
         placeholder={value.length ? 'Add another…' : 'dentist, plumber, real estate…'}
-        className="min-w-[140px] flex-1 border-0 bg-transparent py-0.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-0"
+        className="min-w-[140px] flex-1 border-0 bg-transparent py-0.5 text-sm text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-0"
       />
       {value.length > 1 && (
-        <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+        <span className="shrink-0 rounded-md bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:text-slate-400">
           {value.length} keywords
         </span>
       )}
