@@ -65,7 +65,7 @@ export default function KeywordInput({ value = [], onChange, max = 50, disabled 
           const text = e.clipboardData.getData('text');
           if (/[,;\n\t]/.test(text)) { e.preventDefault(); add(text); }
         }}
-        placeholder={value.length ? 'Add another…' : 'dentist, plumber, real estate…'}
+        placeholder={value.length ? 'Add another…' : (placeholder || 'dentist, plumber, real estate…')}
         className="min-w-[140px] flex-1 border-0 bg-transparent py-0.5 text-sm text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-0"
       />
       {value.length > 1 && (

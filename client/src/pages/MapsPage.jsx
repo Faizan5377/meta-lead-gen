@@ -143,7 +143,7 @@ export default function MapsPage({ onLibraryChanged }) {
             ) : (
               <button onClick={onStart} disabled={!canStart}
                 title={canStart ? '' : 'Add at least one search term'}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
+                className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">
                 <Play size={14} /> {busy ? 'Starting…' : 'Start scraping'}
               </button>
             )}
@@ -199,7 +199,7 @@ function Toggle({ label, checked, onChange, disabled, hint }) {
       <label className="flex h-[38px] cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <input type="checkbox" checked={checked} disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
-          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400" />
+          className="h-4 w-4 accent-brand-600 rounded border-slate-300 text-brand-600 focus:ring-brand-400 dark:border-slate-600" />
         <span className="text-sm text-slate-600 dark:text-slate-300">{label}</span>
         <InfoTip text={hint} />
       </label>

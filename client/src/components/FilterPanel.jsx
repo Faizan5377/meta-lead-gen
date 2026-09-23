@@ -93,7 +93,7 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
         ) : (
           <button onClick={onStart} disabled={!canStart}
             title={canStart ? '' : 'Add at least one keyword and country'}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
+            className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">
             <Play size={14} /> {busy ? 'Starting…' : 'Start scraping'}
           </button>
         )}
