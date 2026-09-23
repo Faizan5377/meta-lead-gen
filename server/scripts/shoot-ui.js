@@ -70,6 +70,13 @@ for (const theme of ['light', 'dark']) {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2200);
 
+    // The lead-quality filters are collapsed by default, so they'd never be
+    // audited — open them.
+    try {
+      const toggle = page.getByRole('button', { name: /Lead quality/i }).first();
+      if (await toggle.count()) { await toggle.click({ timeout: 2000 }); await page.waitForTimeout(500); }
+    } catch { /* not on this page */ }
+
     const file = `${OUT}/${theme}-${route}.png`;
     await page.screenshot({ path: file });
 

@@ -153,7 +153,7 @@ class PlacesLibrary {
       kept: run.counts.kept,
       found: run.counts.found,
       skipped_known: run.counts.skippedKnown,
-      skipped_filtered: run.counts.skippedNoPhone,
+      skipped_filtered: run.counts.skippedFiltered,
       started_at: run.startedAt,
       finished_at: run.finishedAt,
     }, { onConflict: 'id' });

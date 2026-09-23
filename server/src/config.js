@@ -64,7 +64,7 @@ export const config = {
     defaultTarget: num(process.env.MAPS_DEFAULT_TARGET, 100),
     // Scrolling the results rail is how Maps paginates.
     scrollSettleMs: num(process.env.MAPS_SCROLL_SETTLE_MS, 1600),
-    stableScrollsToStop: num(process.env.MAPS_STABLE_SCROLLS, 4),
+    stableScrollsToStop: num(process.env.MAPS_STABLE_SCROLLS, 6),
     maxQueryMs: num(process.env.MAPS_MAX_QUERY_MS, 10 * 60 * 1000),
     maxRunMs: num(process.env.MAPS_MAX_RUN_MS, 60 * 60 * 1000),
   },

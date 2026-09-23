@@ -11,9 +11,11 @@ export const mapsInitialState = {
   phase: 'idle',       // idle | searching | saving | done
   filters: null,
   target: 0,
-  counts: { found: 0, kept: 0, skippedKnown: 0, skippedNoPhone: 0 },
+  counts: { found: 0, kept: 0, skippedKnown: 0, skippedFiltered: 0 },
   places: [],
   index: {},           // feature_id -> position
+  rejects: [],         // {name, reason} — so a filtered list is never a black box
+  rejectTally: {},     // reason -> count, exact, from the server
   errors: [],
   notices: [],
   ticker: null,
@@ -41,6 +43,7 @@ function fromSnapshot(state, snap) {
     counts: snap.counts ?? state.counts,
     places,
     index: reindex(places),
+    rejectTally: snap.rejectReasons ?? state.rejectTally,
     exportReady: !!snap.exportReady,
   };
 }
@@ -48,7 +51,7 @@ function fromSnapshot(state, snap) {
 export function mapsReducer(state, ev) {
   switch (ev.type) {
     case 'run_started':
-      return { ...fromSnapshot(state, ev.snapshot), status: 'running', phase: 'searching', ticker: 'Starting…', errors: [], notices: [] };
+      return { ...fromSnapshot(state, ev.snapshot), status: 'running', phase: 'searching', ticker: 'Starting…', errors: [], notices: [], rejects: [], rejectTally: {} };
 
     case 'phase_started':
       return { ...state, phase: ev.phase, ticker: ev.phase === 'saving' ? 'Saving to library…' : 'Searching Google Maps…' };
@@ -78,8 +81,18 @@ export function mapsReducer(state, ev) {
       };
     }
 
-    case 'place_rejected':
-      return { ...state, counts: ev.counts || state.counts };
+    // Keep the last few so the user can see which gate is eating their results.
+    // Reasons carry numbers ("rating 4.2 < 4.5"); the tally groups on the
+    // wording, so it points at the filter rather than at every distinct value.
+    case 'place_rejected': {
+      const key = String(ev.reason || 'filtered').replace(/-?\d[\d.,]*/g, 'N');
+      return {
+        ...state,
+        counts: ev.counts || state.counts,
+        rejects: state.rejects.concat([{ name: ev.name, reason: ev.reason }]).slice(-50),
+        rejectTally: { ...state.rejectTally, [key]: (state.rejectTally[key] || 0) + 1 },
+      };
+    }
 
     // Review counts arrive after the rail finishes rendering, so the server
     // sends a corrected snapshot rather than us losing them.

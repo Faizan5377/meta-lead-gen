@@ -22,6 +22,7 @@ import { FILTER_META, normalizeFilters } from './filters.js';
 import { csvFilename, exportPlaces, exportRows, exportRun, libraryFilename, placesFilename } from './exporter.js';
 import { library } from './library.js';
 import { placesLibrary } from './maps/library.js';
+import { normalizeQuality } from './maps/quality.js';
 import * as maps from './maps/orchestrator.js';
 import { runPipeline, stopRun } from './orchestrator.js';
 import { shutdown } from './scraper/engine.js';
@@ -211,10 +212,14 @@ function normalizeMapsFilters(body = {}) {
       queries, locations, target,
       language: String(body.language || 'en').slice(0, 5),
       region: String(body.region || 'us').slice(0, 5),
-      requirePhone: body.requirePhone === true,
-      requireWebsite: body.requireWebsite === true,
-      minRating: Math.max(0, Math.min(5, Number(body.minRating) || 0)),
-      minReviews: Math.max(0, Number(body.minReviews) || 0),
+      // Google caps one search at ~120 results; sweeping nearby viewports is
+      // the only way past that, so it is on unless explicitly turned off.
+      autoExpand: body.autoExpand !== false,
+      // A ceiling, not a plan: the sweep goes outward nearest-first and stops
+      // the moment the target is met, so a generous ring costs nothing.
+      expandRing: Math.max(1, Math.min(3, Number(body.expandRing) || 2)),
+      // Full lead-quality control lives in one validated object.
+      quality: normalizeQuality(body.quality ?? body),
     },
     errors,
   };

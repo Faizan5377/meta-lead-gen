@@ -1,8 +1,11 @@
-# Ad Library Harvester
+# Lead Harvester
 
-A headless tool that mines the **Meta Ad Library** and turns it into a clean, deduplicated list of **unique advertisers** — each with how long its ad has been running, how many ads it's running, the platforms it runs on, follower counts, and a direct link to open the ad in the Ad Library.
+Two headless lead scrapers behind one interface:
 
-Every search is saved as an **execution** in a shared Supabase library, so running the same keyword again only ever returns advertisers you don't already have.
+- **Meta Ad Library** — a clean, deduplicated list of **unique advertisers**, each with how long its ad has been running, how many ads it's running, the platforms it runs on, follower counts, and a direct link to open the ad.
+- **Google Maps** — local businesses with phone, website, rating, review count, hours and coordinates, filtered on lead quality Google itself won't filter on.
+
+Every search is saved as an **execution** in a shared Supabase library, so running the same search again only ever returns leads you don't already have.
 
 ---
 
@@ -64,6 +67,36 @@ Each execution shows when it ran, how many ads it collected, how many were filte
 
 ---
 
+## Google Maps
+
+The second tab is a **Google Maps scraper** — the same idea applied to local businesses. Type a business type and a place, and every result comes back with its phone, website, rating, review count, category, opening hours, address and coordinates, plus a direct Maps link and the CID link that opens its Google Business Profile.
+
+It reads Google's own internal JSON rather than the visible page, so it survives restyling. Results are deduplicated against the same shared library, so repeat searches only return businesses you don't already have.
+
+### Lead quality — filters Google doesn't offer
+
+Google gives you no filters at all. These are applied to every result, and **anything filtered out never uses up your target** — so tightening them makes your list better, not shorter:
+
+- **Phone / Website** — *Any*, *Must have*, or *Must NOT have*. "No website" is the strongest prospect list there is if you sell websites.
+- **Rating between** — a range, not just a floor. Looking for businesses with a reputation problem you can fix? `3.0 – 4.2`.
+- **Reviews between** — an upper bound finds smaller, less established businesses, usually far more receptive than a chain with 20,000 reviews.
+- **Exclude names** — the quickest way to strip national chains out of a local list.
+- **Only these / Exclude categories** — Google mixes adjacent trades into one search; this pins results to the trade you actually want.
+- **Keep unrated places** · **Only open right now**
+
+Every rejection is counted with its reason, and the run shows you which gate did the damage — so a short list is never a mystery.
+
+### Getting the number you asked for
+
+Google caps **one search at roughly 120 results**, however far you scroll. That's a limit on the query, not on the scraper — which is why a target of 100 behind strict filters can finish in single figures. With **"Widen the search"** on (the default), a run that's still short does two more things automatically:
+
+1. **Asks differently.** The categories Google itself gave the leads that passed — "Drainage service", "Water heater installer" — become fresh searches, each with its own ~120 results, and on-niche by construction because they were learned from leads *your* filters accepted. Nothing about any trade is hardcoded.
+2. **Asks elsewhere.** The same search is re-run over neighbouring parts of the map, **nearest first**. Each viewport returns its own ~120, ranked by proximity to that centre.
+
+"How far out" is a **ceiling, not a plan** — the sweep stops the moment your target is met, so a generous setting costs nothing on an easy search. If a run still finishes short, it tells you exactly which lever to pull: loosen the filter that dropped the most, search further out, or add more search terms.
+
+---
+
 ## Quick start
 
 **Requirements:** Node.js **22.5+** and macOS / Linux / WSL. An `.nvmrc` is included — run `nvm use`, since Node 20 rejects the `--experimental-sqlite` flag the scripts pass.
@@ -120,6 +153,10 @@ If Supabase is unreachable — no credentials, project paused, network down — 
 | `SUPABASE_DB_PASSWORD` | — | Only needed by `supabase:setup` (DDL) |
 | `DB_PATH` | `server/data/leads.db` | Local fallback library |
 | `STORAGE_STATE` | — | Optional Playwright session JSON |
+| `MAPS_MAX_TARGET` / `MAPS_DEFAULT_TARGET` | `2500` / `100` | Maps run size |
+| `MAPS_STABLE_SCROLLS` | `6` | Stop a Maps search after N scrolls that surface nothing new |
+| `MAPS_SCROLL_SETTLE_MS` | `1600` | Pause after each rail scroll |
+| `MAPS_MAX_QUERY_MS` / `MAPS_MAX_RUN_MS` | 10 min / 60 min | Safety ceilings per search and per run |
 
 ---
 
@@ -144,15 +181,21 @@ server/  (Node + Fastify + Playwright + Supabase, Server-Sent Events)
       advertiserScraper.js  "About the advertiser" → Instagram followers
       parsers.js         dates / link-decode helpers
       humanize.js        jittered delays + human-like scrolling
+    maps/
+      engine.js          Maps harvester: search → learned terms → area sweep
+      parser.js          Maps' internal JSON → normalized place record
+      quality.js         Lead-quality gate (pure, unit-tested)
+      orchestrator.js    Harvest → save pipeline
+      library.js         Shared places library
   sql/schema.sql         Supabase tables + indexes
-  scripts/               supabase-setup · relevance-check · probe-feed
-  test/                  relevance gate unit tests
+  scripts/               supabase-setup · relevance-check · probe-feed · probe-sweep · shoot-ui
+  test/                  relevance gate · target ceiling · lead quality · viewport maths
 
 client/  (Vite + React + Tailwind)
   src/
-    App.jsx              Shell + navigation
-    pages/               ScraperPage · LibraryPage (executions)
-    lib/                 api client, SSE reducer, formatters
+    App.jsx              Shell + navigation + theme
+    pages/               ScraperPage · LibraryPage · MapsPage · MapsLibraryPage
+    lib/                 api client, SSE reducers, formatters
     components/          FilterPanel, ResultsTable, MetricsBar, ProgressPanel…
 ```
 
@@ -167,6 +210,8 @@ client/  (Vite + React + Tailwind)
 | `GET /api/library/runs/:id/ads` · `/export` | One execution's ads · CSV |
 | `PATCH`/`DELETE /api/library/runs/:id` | Rename / delete an execution |
 | `GET /api/library/stats` | Library size + which store is live |
+
+Google Maps mirrors the same shape under `/api/maps/…` — `limits`, `runs` (+ `start` · `stop` · `events` · `export`), and `library/runs` (+ `places` · `export` · rename · delete) · `library/stats`.
 
 ---
 

@@ -47,20 +47,41 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
 // Strip the anti-XSSI prefix Google puts in front of the JSON.
-export function parseBody(text) {
-  if (!text) return null;
+//
+// The FIRST page comes back as a bare array. Every page after it — the ones
+// scrolling fetches — arrives wrapped in an envelope whose `d` field is the
+// real payload as a STRING, complete with its own anti-XSSI prefix:
+//
+//   {"c":0,"d":")]}'\n[[\"Plumbers in Dallas\",[[…]]]"}
+//
+// Missing that unwrap silently cost ~100 of every 120 results: the first page
+// parsed, every later page returned an object and yielded nothing.
+export function parseBody(text, depth = 0) {
+  if (!text || depth > 2) return null;
+  // Google brackets these payloads with anti-XSSI markers at BOTH ends —
+  // a leading )]}' or /*""*/ and, on the paginated ones, a trailing /*""*/.
+  // Leaving the trailing marker on makes JSON.parse fail over the whole body.
   const cleaned = String(text)
     .replace(/^\)\]\}'\n?/, '')
     .replace(/^\/\*""\*\//, '')
+    .replace(/\/\*""\*\/\s*$/, '')
     .trim();
+
+  let json;
   try {
-    return JSON.parse(cleaned);
+    json = JSON.parse(cleaned);
   } catch {
-    // Occasionally the payload is wrapped one level deeper.
+    // Occasionally the payload starts a little further in.
     const i = cleaned.indexOf('[');
     if (i < 0) return null;
-    try { return JSON.parse(cleaned.slice(i)); } catch { return null; }
+    try { json = JSON.parse(cleaned.slice(i)); } catch { return null; }
   }
+
+  // Unwrap the pagination envelope and parse what's inside.
+  if (json && !Array.isArray(json) && typeof json === 'object' && typeof json.d === 'string') {
+    return parseBody(json.d, depth + 1);
+  }
+  return json;
 }
 
 // Opening hours -> { Monday: "8 AM–5 PM", … } plus a plain "open now" string.
