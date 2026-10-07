@@ -8,6 +8,8 @@
 //   • quotes only where needed, doubled inside quoted fields
 //   • a leading ' on values Excel would otherwise treat as a formula
 
+import { store } from './store.js';
+
 const COLUMNS = [
   'page_name', 'ad_url', 'page_url', 'days_running', 'start_date', 'is_active',
   'ads_running', 'platforms', 'followers_facebook', 'followers_instagram',
@@ -78,7 +80,10 @@ function render(rows) {
 
 export function exportRun(run) {
   const fallback = (run.filters?.keywords || []).join('; ') || run.filters?.keyword || '';
-  return render(toRows(run.businesses, fallback));
+  // store.keptBusinesses, not run.businesses: with Maps verification on the
+  // array also holds candidates Google never confirmed, and a CSV is exactly
+  // where an unverified lead must never turn up.
+  return render(toRows(store.keptBusinesses(run), fallback));
 }
 
 // Any filtered slice of the library, straight from a query result.

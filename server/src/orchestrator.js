@@ -247,6 +247,7 @@ async function runPool(items, concurrency, run, worker) {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function finalize(run, status, message) {
+  store.purgeUnverified(run);
   run.status = status;
   run.phase = 'done';
   run.finishedAt = now();

@@ -58,6 +58,15 @@ class RunStore {
     return run.counts.kept;
   }
 
+  // The run is over. Any candidate still waiting on Google was never going to
+  // be checked — the target filled first — and must not be mistaken for a lead.
+  purgeUnverified(run) {
+    if (!run.filters?.verifyOnMaps) return 0;
+    const left = run.businesses.filter((b) => b.verify_status !== 'kept');
+    for (const b of left) this.dropCandidate(run, b, 'not checked — target already met');
+    return left.length;
+  }
+
   // Verification said no. The candidate leaves the array entirely so the
   // snapshot stays small on a run that checks thousands to keep hundreds.
   dropCandidate(run, business, reason) {
@@ -168,7 +177,7 @@ class RunStore {
       filters: run.filters,
       target: run.target,
       counts: run.counts,
-      businesses: run.businesses,
+      businesses: this.keptBusinesses(run),
       errors: run.errors.slice(-100),
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
