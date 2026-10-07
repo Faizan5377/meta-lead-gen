@@ -56,6 +56,8 @@ function Duration({ days }) {
   return <span className={`tabular ${tone}`} title={`${n} days`}>{label}</span>;
 }
 
+const is24h = (v) => v === true || v === 'true' || v === 1 || v === '1';
+
 const Dash = () => <span className="text-slate-300 dark:text-slate-600">—</span>;
 
 const COLS = [
@@ -192,7 +194,7 @@ export default function ResultsTable({ businesses, compact = false }) {
                   ) : <Dash />}
                 </td>
                 <td className="max-w-[170px] px-3 py-2.5">
-                  {b.maps_open_24h === true || b.maps_open_24h === 'true' ? (
+                  {is24h(b.maps_open_24h) ? (
                     <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700 dark:bg-brand-950/40 dark:text-brand-300"
                       title={b.maps_hours || ''}>24 hours</span>
                   ) : b.maps_hours ? (

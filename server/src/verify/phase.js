@@ -12,17 +12,17 @@ import { lookupPlace } from '../maps/place.js';
 import { jitter } from '../scraper/humanize.js';
 import { newPage } from '../scraper/engine.js';
 import { store } from '../store.js';
-import { judgeVerified, matchPlace } from './gate.js';
+import { ALL_DAYS, isAllDay, judgeVerified, matchPlace } from './gate.js';
 
 // What the lead gains from Google. Prefixed so it can never collide with the
 // Ad Library's own fields — the rating here is the Maps rating, not Meta's.
-function attach(business, place, match) {
+function attach(business, place, match, rules) {
   business.maps_name = place.name || null;
   business.maps_category = place.category || null;
   business.maps_rating = place.rating ?? null;
   business.maps_reviews = place.review_count ?? null;
   business.maps_hours = formatHours(place.hours);
-  business.maps_open_24h = place.hours ? is24(place.hours) : null;
+  business.maps_open_24h = place.hours ? is24(place.hours, rules) : null;
   business.maps_address = place.address || null;
   business.maps_phone = place.phone || null;
   business.maps_website = place.website || null;
@@ -42,7 +42,13 @@ function formatHours(hours) {
     .join(' · ');
 }
 
-const is24 = (hours) => Object.values(hours).every((s) => /open\s*24\s*hours/i.test(String(s)));
+// Judged on the SAME days the run required, or the flag contradicts the gate:
+// a firm kept under a Mon-Fri rule but closed on Sunday would be filed as "not
+// 24 hours" in the very list its 24-hour rule admitted it to.
+function is24(hours, rules) {
+  const days = (rules?.require24h ? rules.hoursDays : ALL_DAYS).filter((d) => d in hours);
+  return days.length > 0 && days.every((d) => isAllDay(hours[d]));
+}
 
 const regionOf = (filters) => {
   const c = (filters.countries || []).find((x) => x && x !== 'ALL') || 'US';
@@ -69,7 +75,7 @@ async function verifyOne(page, run, business, { rules, region, emit }) {
   // Re-check the target here, not just at admission: several workers can be
   // mid-flight when the last slot is filled, and the run must never return 201.
   if (verdict.keep && store.recount(run) < run.target) {
-    attach(business, place, match);
+    attach(business, place, match, rules);
     business.verify_status = 'kept';
     business.verify_reason = null;
     store.recount(run);

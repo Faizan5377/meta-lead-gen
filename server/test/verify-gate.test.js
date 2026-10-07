@@ -173,3 +173,24 @@ describe('normalizeVerifyFilters', () => {
     assert.deepEqual(v.niche, ['hvac contractor', 'plumber']);
   });
 });
+
+// Regression: a lead kept under a Mon-Fri rule was being labelled "not 24
+// hours" because the flag was judged on all seven days. The list contradicted
+// its own filter.
+describe('the 24h flag agrees with the rule that admitted the lead', () => {
+  const weekdayOnly = {
+    Monday: ALWAYS, Tuesday: ALWAYS, Wednesday: ALWAYS, Thursday: ALWAYS,
+    Friday: ALWAYS, Saturday: 'Closed', Sunday: 'Closed',
+  };
+
+  it('is kept by the weekday rule', () => {
+    assert.equal(judgeHours(weekdayOnly, { require24h: true, days: WEEKDAYS }).keep, true);
+  });
+
+  it('and every required day really is round-the-clock', () => {
+    // What the flag must agree with: all the days the rule asked about.
+    assert.ok(WEEKDAYS.every((d) => isAllDay(weekdayOnly[d])));
+    // …while the naive all-seven-days reading says no, which was the bug.
+    assert.ok(!Object.values(weekdayOnly).every(isAllDay));
+  });
+});
