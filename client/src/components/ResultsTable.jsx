@@ -1,4 +1,4 @@
-import { ExternalLink, Search } from 'lucide-react';
+import { ExternalLink, Search, Star } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { formatFollowers, safeHost } from '../lib/format.js';
 
@@ -56,6 +56,8 @@ function Duration({ days }) {
   return <span className={`tabular ${tone}`} title={`${n} days`}>{label}</span>;
 }
 
+const Dash = () => <span className="text-slate-300 dark:text-slate-600">—</span>;
+
 const COLS = [
   { key: 'page_name', label: 'Business', sortable: true },
   { key: 'days_running', label: 'Running', sortable: true, align: 'right' },
@@ -66,6 +68,10 @@ const COLS = [
   { key: 'is_active', label: 'Status' },
   { key: 'keyword', label: 'Keyword', sortable: true },
   { key: 'country', label: 'Country' },
+  { key: 'cta_text', label: 'Button', sortable: true },
+  { key: 'maps_category', label: 'Maps category' },
+  { key: 'maps_rating', label: 'Maps rating', sortable: true, align: 'right' },
+  { key: 'maps_hours', label: 'Hours' },
   { key: 'relevance_score', label: 'Match', sortable: true, align: 'right' },
   { key: 'links', label: 'Open', align: 'right' },
 ];
@@ -161,6 +167,38 @@ export default function ResultsTable({ businesses, compact = false }) {
                   ) : <span className="text-slate-300 dark:text-slate-600">—</span>}
                 </td>
                 <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300">{b.country || '—'}</td>
+                <td className="max-w-[120px] px-3 py-2.5">
+                  {b.cta_text
+                    ? <span className="inline-block max-w-full truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">{b.cta_text}</span>
+                    : <Dash />}
+                </td>
+                <td className="max-w-[150px] px-3 py-2.5">
+                  {b.maps_category ? (
+                    <span className="truncate text-[11px] text-slate-600 dark:text-slate-300"
+                      title={`Matched by ${b.maps_match || '—'}${b.maps_match_confidence ? ` (${b.maps_match_confidence}%)` : ''}`}>
+                      {b.maps_category}
+                    </span>
+                  ) : <Dash />}
+                </td>
+                <td className="px-3 py-2.5 text-right">
+                  {b.maps_rating != null ? (
+                    <div className="flex items-baseline justify-end gap-1">
+                      <Star size={10} className="translate-y-px fill-amber-400 text-amber-400" />
+                      <span className="tabular font-medium text-slate-700 dark:text-slate-200">{b.maps_rating}</span>
+                      {b.maps_reviews != null && (
+                        <span className="tabular text-[11px] text-slate-400 dark:text-slate-500">({Number(b.maps_reviews).toLocaleString()})</span>
+                      )}
+                    </div>
+                  ) : <Dash />}
+                </td>
+                <td className="max-w-[170px] px-3 py-2.5">
+                  {b.maps_open_24h === true || b.maps_open_24h === 'true' ? (
+                    <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700 dark:bg-brand-950/40 dark:text-brand-300"
+                      title={b.maps_hours || ''}>24 hours</span>
+                  ) : b.maps_hours ? (
+                    <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400" title={b.maps_hours}>{b.maps_hours}</span>
+                  ) : <Dash />}
+                </td>
                 <td className="px-3 py-2.5 text-right">
                   {b.relevance_score != null ? (
                     <span className="tabular text-[11px] text-slate-500 dark:text-slate-400" title={b.relevance_reason || ''}>
@@ -175,6 +213,12 @@ export default function ResultsTable({ businesses, compact = false }) {
                         target="_blank" rel="noreferrer" title="Open this ad in the Meta Ad Library"
                         className="inline-flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:text-slate-400 hover:border-brand-300 hover:text-brand-600">
                         Ad <ExternalLink size={9} />
+                      </a>
+                    )}
+                    {b.maps_url && (
+                      <a href={b.maps_url} target="_blank" rel="noreferrer" title={b.maps_address || 'Google Maps listing'}
+                        className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-400">
+                        Maps
                       </a>
                     )}
                     {b.page_url && (

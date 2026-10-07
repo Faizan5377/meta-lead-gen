@@ -176,6 +176,116 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
                       disabled={running} placeholder="Add related terms…"
                     />
                   </Field>
+                  <Field label={<>Minimum score <InfoTip text="Raise this to be stricter. Be careful: a company that SELLS TO your trade talks about it constantly and scores high, while a local contractor with short ad copy scores low — so a high bar tends to drop real leads and keep suppliers. Google Maps verification below is the more reliable way to be strict." /></>}>
+                    <input
+                      type="number" min={0} max={100} value={filters.minRelevance ?? ''}
+                      placeholder="40 (default)" disabled={running}
+                      onChange={(e) => set({ minRelevance: e.target.value === '' ? undefined : clamp(e.target.value, 0, 100) })}
+                      className={NUM}
+                    />
+                  </Field>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Ad button ── */}
+          <Field
+            label={<>Ad button <InfoTip text={meta.help.ctas} /></>}
+            className="sm:col-span-2"
+          >
+            <MultiSelect
+              options={meta.ctas || []} value={filters.ctas || []}
+              onChange={(ctas) => set({ ctas })} disabled={running}
+              placeholder="Any button"
+            />
+            <button
+              type="button" disabled={running}
+              onClick={() => set({ ctas: (meta.ctas || []).filter((c) => c.group === 'Customer').map((c) => c.value) })}
+              className="mt-1.5 text-[11px] font-medium text-brand-600 hover:underline disabled:text-slate-400 dark:text-brand-400"
+            >
+              Customer-intent buttons only
+            </button>
+          </Field>
+
+          {/* ── Google Maps verification ── */}
+          <div className="sm:col-span-2 lg:col-span-4">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/50 p-3.5">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox" checked={!!filters.verifyOnMaps} disabled={running}
+                  onChange={(e) => set({ verifyOnMaps: e.target.checked })}
+                  className="h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-brand-600 dark:text-brand-400 focus:ring-brand-400"
+                />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Verify every lead on Google Maps</span>
+                <InfoTip text={meta.help.verifyOnMaps} />
+              </label>
+              <div className="mt-1 pl-6 text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+                Attaches opening hours, rating, review count, category and a Maps link — and drops
+                anything Google can’t confirm. Your target still means that many finished leads, so
+                the run digs deeper instead of returning fewer.
+              </div>
+
+              {filters.verifyOnMaps && (
+                <div className="mt-3 grid gap-3 pl-6 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="sm:col-span-2 lg:col-span-4 space-y-2">
+                    <Check
+                      label="Only businesses in my trade"
+                      checked={v(filters).nicheCheck !== false} disabled={running}
+                      onChange={(nicheCheck) => setV(filters, set, { nicheCheck })}
+                      hint="Runs one Maps search for your keyword first and learns what Google calls this trade — e.g. “HVAC contractor”, “heating contractor”. Leads filed as something else (technical school, parts supplier, marketing agency) are dropped, however well their ad text scores."
+                    />
+                    <Check
+                      label="Only businesses open 24 hours"
+                      checked={!!v(filters).require24h} disabled={running}
+                      onChange={(require24h) => setV(filters, set, { require24h })}
+                      hint="Read from the full week on the business’s Maps listing. Days you don’t tick are ignored, so a weekday-only rule still keeps a firm that closes its office at weekends."
+                    />
+                  </div>
+
+                  {v(filters).require24h && (
+                    <div className="sm:col-span-2 lg:col-span-4">
+                      <Label>Days that must be 24 hours</Label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {DAYS.map((d) => {
+                          const on = (v(filters).hoursDays || []).includes(d);
+                          return (
+                            <button
+                              key={d} type="button" disabled={running}
+                              onClick={() => setV(filters, set, {
+                                hoursDays: on
+                                  ? v(filters).hoursDays.filter((x) => x !== d)
+                                  : DAYS.filter((x) => x === d || v(filters).hoursDays.includes(x)),
+                              })}
+                              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                                on ? 'bg-brand-600 text-white shadow-sm'
+                                   : 'border border-slate-200 text-slate-500 hover:bg-white dark:border-slate-700 dark:text-slate-400'
+                              }`}
+                            >{d.slice(0, 3)}</button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <Field label={<>Minimum rating <InfoTip text="Google Maps rating. 0 keeps everything, including unrated businesses." /></>}>
+                    <input type="number" min={0} max={5} step={0.1} value={v(filters).minRating ?? 0}
+                      disabled={running} className={NUM}
+                      onChange={(e) => setV(filters, set, { minRating: clamp(e.target.value, 0, 5) })} />
+                  </Field>
+                  <Field label={<>Minimum reviews <InfoTip text="A rough proxy for how established a business is." /></>}>
+                    <input type="number" min={0} value={v(filters).minReviews ?? 0}
+                      disabled={running} className={NUM}
+                      onChange={(e) => setV(filters, set, { minReviews: Math.max(0, Number(e.target.value) || 0) })} />
+                  </Field>
+                  <Field
+                    label={<>Pin categories <InfoTip text="Leave empty to let the run work them out from Google. Fill it in to override, e.g. “hvac contractor, heating contractor”." /></>}
+                    className="sm:col-span-2"
+                  >
+                    <input type="text" value={v(filters).niche || ''} disabled={running}
+                      placeholder="learned automatically" className={NUM}
+                      onChange={(e) => setV(filters, set, { niche: e.target.value })} />
+                  </Field>
                 </div>
               )}
             </div>
@@ -183,6 +293,26 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
         </div>
       )}
     </div>
+  );
+}
+
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const NUM = 'w-full rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm tabular shadow-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:bg-slate-900 dark:focus:ring-brand-900 disabled:bg-slate-50 dark:disabled:bg-slate-800';
+
+// The verification settings live in a nested object, so reading and patching
+// them goes through these rather than being spelled out at every control.
+const v = (filters) => filters.verify || {};
+const setV = (filters, set, patch) => set({ verify: { ...(filters.verify || {}), ...patch } });
+
+function Check({ label, checked, onChange, disabled, hint }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+      <input type="checkbox" checked={checked} disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400 dark:border-slate-600" />
+      {label}
+      <InfoTip text={hint} />
+    </label>
   );
 }
 
@@ -199,6 +329,9 @@ function countActive(f, meta) {
   if (f.startDateMin || f.startDateMax) n++;
   if (f.nicheTerms?.length) n++;
   if (!f.relevanceEnabled) n++;
+  if (f.minRelevance != null) n++;
+  if (f.ctas?.length) n++;
+  if (f.verifyOnMaps) n++;
   return n;
 }
 

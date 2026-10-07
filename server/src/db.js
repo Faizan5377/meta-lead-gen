@@ -19,6 +19,7 @@ const BUSINESS_COLUMNS = [
   'platforms', 'ads_running', 'collation_id', 'ad_url',
   'is_active', 'start_date', 'end_date', 'days_running',
   'cta_text', 'cta_type', 'title', 'body_text', 'link_url', 'display_domain',
+  'maps_name', 'maps_category', 'maps_rating', 'maps_reviews', 'maps_hours', 'maps_open_24h', 'maps_address', 'maps_phone', 'maps_website', 'maps_url', 'maps_cid_url', 'maps_match', 'maps_match_confidence', 'verify_status', 'verify_reason',
   'display_format', 'image_url', 'video_url',
   'keyword', 'keywords', 'country',
   'relevance_score', 'relevance_reason',

@@ -13,6 +13,15 @@ const DEFAULT_FILTERS = {
   activeStatus: 'active', mediaType: 'all', platforms: [], languages: [],
   startDateMin: '', startDateMax: '', sort: 'impressions', target: 100,
   relevanceEnabled: true, nicheTerms: [], enrichAdvertisers: true,
+  ctas: [],
+  // Google Maps verification. Off by default — it costs a Maps visit per
+  // advertiser, so it has to be a deliberate choice.
+  verifyOnMaps: false,
+  verify: {
+    require24h: false,
+    hoursDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    niche: '', minRating: 0, minReviews: 0,
+  },
 };
 
 const LAST_RUN_KEY = 'adharvester:lastRunId';

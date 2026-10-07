@@ -29,6 +29,25 @@ create table if not exists public.ads (
 
   cta_text                  text,
   cta_type                  text,
+
+  -- Google Maps verification (see src/verify/). Prefixed because the rating
+  -- here is Google's, not Meta's.
+  maps_name                 text,
+  maps_category             text,
+  maps_rating               numeric,
+  maps_reviews              integer,
+  maps_hours                text,
+  maps_open_24h             boolean,
+  maps_address              text,
+  maps_phone                text,
+  maps_website              text,
+  maps_url                  text,
+  maps_cid_url              text,
+  maps_match                text,
+  maps_match_confidence     integer,
+  verify_status             text,
+  verify_reason             text,
+
   title                     text,
   body_text                 text,
   link_url                  text,

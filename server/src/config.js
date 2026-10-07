@@ -69,6 +69,17 @@ export const config = {
     maxRunMs: num(process.env.MAPS_MAX_RUN_MS, 60 * 60 * 1000),
   },
 
+  // Google Maps verification of Ad Library leads.
+  //
+  // Every advertiser that clears the cheap gates costs one Maps visit, so a
+  // strict run checks far more businesses than it keeps. maxChecks is the
+  // safety rail that stops a hopeless filter set running all night.
+  verify: {
+    concurrency: num(process.env.VERIFY_CONCURRENCY, 3),
+    lookupMs: num(process.env.VERIFY_LOOKUP_MS, 22000),
+    maxChecks: num(process.env.VERIFY_MAX_CHECKS, 4000),
+  },
+
   dbPath: process.env.DB_PATH || path.resolve(__dirname, '../data/leads.db'),
 
   storageState: process.env.STORAGE_STATE && fs.existsSync(process.env.STORAGE_STATE)

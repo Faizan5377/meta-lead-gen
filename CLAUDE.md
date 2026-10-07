@@ -22,7 +22,7 @@ cd server && npm install && npx playwright install chromium
 cp .env.example .env          # add Supabase credentials
 npm run supabase:setup        # DDL; --check to verify only
 npm run dev                   # :8787
-npm test                      # unit tests: relevance gate, target ceiling, Maps quality + viewport maths
+npm test                      # unit tests: relevance, target ceiling, Maps quality/viewport, verification gate + niche census
 
 cd client && npm install && npm run dev    # :5173, proxies /api
 ```
@@ -35,6 +35,7 @@ Diagnostics that avoid a full run:
 npm run relevance:check -- plumbing US 30     # what the niche gate keeps/drops, with reasons
 npm run probe:feed -- plumbing US             # dump a raw GraphQL node to /tmp/feed-node.json
 node scripts/probe-sweep.js Plumbers "Dallas TX"   # Maps: how many NEW places the area sweep adds
+node scripts/probe-place.js "Some Business Name"   # where Maps hides a place's full-week hours
 ```
 
 There is **no linter**.
@@ -63,6 +64,39 @@ Guards that matter:
 - A learned category needs **two** corroborating advertisers before it can vouch alone.
 - A category-only pass never teaches, or it self-reinforces.
 - Rejected ads **don't consume the target**, which is how you still get exactly N relevant results.
+
+### Google Maps verification of Ad Library leads
+
+`server/src/verify/`. Optional per run (`verifyOnMaps`), and it changes the shape of the pipeline, so read this before touching the orchestrator.
+
+**Why it exists.** Keyword relevance cannot separate a trade from the businesses that sell to it. Measured on a live "HVAC" run: Lincoln Tech scored **79**, HVAC-Plumber SEO Webmasters **85**, United HVAC Motors **84**, while genuine contractors like Bourque Heating and Cooling scored **45**. Suppliers, trade schools and marketing agencies talk about a trade constantly; a local contractor's ad copy is short and generic. **Raising `minRelevance` makes this worse, not better** — it drops the contractors and keeps the suppliers. Don't "fix" relevance by raising the threshold.
+
+Google already draws the line: contractors are filed as `HVAC contractor`, the others as `Technical school`, `Motor supplier`, `Marketing agency`. So:
+
+1. **`verify/niche.js`** runs one ordinary Maps search for the keyword before the harvest and takes a census of the categories that come back. Nothing about any trade is hardcoded — searching "plumber" learns plumbing categories. A category needs **two** businesses, same rule as relevance.js. Sample size is 120 for a reason: a live HVAC census gave `hvac contractor` 105, `air conditioning contractor` 8, `heating contractor` 4 — at a 60 sample the last one never reaches two votes and furnace-led contractors are silently dropped.
+2. **`maps/place.js`** looks one business up. **The rail payload carries only TODAY's hours; the place panel carries the full week and the review count.** Verified live:
+   - `/search?tbm=map` → `[64][i][1][203][0]` → one day
+   - `/maps/preview/place` → `[6][203][0]` → seven days, and `[4][8]` is the review count
+
+   So a 24-hour check must reach the place panel — `lookupPlace` clicks the top card when Maps stops on the rail. `findPlaceRecord` matches on **shape** (feature id at `[10]`, name at `[11]`) because the record's root moves between payloads.
+3. **`verify/gate.js`** is pure and unit-tested: the hours rule, the advertiser↔listing join, the niche test. A wrong join attaches someone else's rating to your lead, so a match must be **evidenced** — shared domain (95), exact name after stripping legal noise (85), or ≥0.8 token overlap (70) — and the evidence is stored on the lead as `maps_match`.
+
+### The target counts VERIFIED leads, not candidates
+
+This is the part that trips you up. With verification on, `run.businesses` holds **candidates**; a lead is real only once Google confirms it.
+
+- `store.keptBusinesses(run)` is the authority — target, save, export and enrichment all go through it, never `run.businesses` directly.
+- `counts.kept` counts confirmed leads, which is what the harvest's `shouldStop` reads, so **a run that keeps 200 may check 2,000**.
+- Verification runs **alongside** the harvest (`verify/phase.js`), not after it. A phase that waited for the harvest could not tell it to keep digging.
+- `library.note()` is deferred until a lead is confirmed — noting a candidate would hide it from every future run even after Google rejected it.
+- A dropped candidate is spliced out of `run.businesses` and its key remembered in `run.rejectedKeys`, so the snapshot stays small and it is never re-checked.
+- `config.verify.maxChecks` (4000) is the safety rail; the run reports honestly when it hits it.
+
+### Filtering on the ad's button (CTA)
+
+`cta_text` was always in the feed; `CTA_ACTIONS` in filters.js just makes it filterable. It is Meta's own button vocabulary, the same kind of platform taxonomy as `MEDIA_TYPES` — not niche words.
+
+The `group` field earns its keep: the button says what the ad is **for**. In a live HVAC run, "Apply now" was almost entirely contractors recruiting technicians and trade schools selling courses, while "Book now" and "Get quote" were businesses chasing customers. It is often a sharper filter than the keyword.
 
 ### The run target is a hard ceiling
 
@@ -140,6 +174,8 @@ Every phase is wrapped; per-item failures are pushed to `run.errors` and emitted
 | New Meta filter | [filters.js](server/src/filters.js) (options + `FILTER_HELP` + `FILTER_META` + `normalizeFilters` + `conditional`), [urlBuilder.js](server/src/urlBuilder.js), [FilterPanel.jsx](client/src/components/FilterPanel.jsx) |
 | New ad field | `feedParser.js` → `BUSINESS_COLUMNS` in [db.js](server/src/db.js) → the `keep` list in `mergeKeptAd` ([store.js](server/src/store.js)), or a displacing ad **wipes it** → `toRow` in [library.js](server/src/library.js) → [sql/schema.sql](server/sql/schema.sql) (+ `supabase:setup`) → `COLUMNS`/`HEADERS` in [exporter.js](server/src/exporter.js) → `ResultsTable.jsx` |
 | Relevance tuning | [relevance.js](server/src/relevance.js) weights + [test/relevance.test.js](server/test/relevance.test.js) |
+| New verification rule | [verify/gate.js](server/src/verify/gate.js) (`judgeVerified` + `normalizeVerifyFilters`) → [test/verify-gate.test.js](server/test/verify-gate.test.js) → `verify` block in [FilterPanel.jsx](client/src/components/FilterPanel.jsx) |
+| New Maps field on a lead | [maps/parser.js](server/src/maps/parser.js) field map → `attach()` in [verify/phase.js](server/src/verify/phase.js) → `BUSINESS_COLUMNS` in [db.js](server/src/db.js) → `toRow` in [library.js](server/src/library.js) → [sql/schema.sql](server/sql/schema.sql) → `COLUMNS`/`HEADERS` in [exporter.js](server/src/exporter.js) → `COLS` **and the matching `<td>`** in [ResultsTable.jsx](client/src/components/ResultsTable.jsx) |
 | New Maps place field | field map at the top of [maps/parser.js](server/src/maps/parser.js) → `normalizePlace` → `toRow` in [maps/library.js](server/src/maps/library.js) → [sql/schema.sql](server/sql/schema.sql) (+ `supabase:setup`) → `PLACE_COLUMNS`/`PLACE_HEADERS` in [exporter.js](server/src/exporter.js) → `PlacesTable` in [MapsPage.jsx](client/src/pages/MapsPage.jsx) |
 | New lead-quality filter | `DEFAULT_QUALITY` + `normalizeQuality` + `judge` + `isActive` in [maps/quality.js](server/src/maps/quality.js) → [test/quality.test.js](server/test/quality.test.js) → `DEFAULTS.quality` + `QualityPanel` + `countActiveQuality` in [MapsPage.jsx](client/src/pages/MapsPage.jsx) |
 

@@ -14,6 +14,8 @@ const COLUMNS = [
   'instagram_handle', 'page_categories', 'country', 'keyword', 'keywords_matched',
   'relevance_score', 'relevance_reason',
   'title', 'body_text', 'cta_text', 'link_url', 'display_domain', 'display_format',
+  'maps_name', 'maps_category', 'maps_rating', 'maps_reviews', 'maps_hours',
+  'maps_open_24h', 'maps_address', 'maps_phone', 'maps_url', 'maps_match',
   'end_date', 'image_url', 'video_url', 'library_id', 'page_id',
 ];
 
@@ -26,6 +28,10 @@ const HEADERS = {
   country: 'Country', keyword: 'Keyword', keywords_matched: 'All Keywords',
   relevance_score: 'Relevance', relevance_reason: 'Relevance Reason',
   title: 'Headline', body_text: 'Ad Text', cta_text: 'CTA',
+  maps_name: 'Maps Listing', maps_category: 'Maps Category', maps_rating: 'Maps Rating',
+  maps_reviews: 'Maps Reviews', maps_hours: 'Opening Hours', maps_open_24h: 'Open 24h',
+  maps_address: 'Maps Address', maps_phone: 'Maps Phone', maps_url: 'Google Maps',
+  maps_match: 'Matched By',
   link_url: 'Destination URL', display_domain: 'Domain', display_format: 'Format',
   end_date: 'Ended', image_url: 'Image URL', video_url: 'Video URL',
   library_id: 'Ad Library ID', page_id: 'Page ID',

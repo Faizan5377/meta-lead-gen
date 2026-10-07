@@ -160,10 +160,12 @@ export function normalizePlace(rec, ctx = {}) {
     category: categories[0] || null,
     categories,
 
-    // Reputation — rating comes from the feed, review_count is merged from the
-    // results rail because this endpoint omits it.
+    // Reputation. The rail payload carries the rating but not the count, so
+    // that one is merged in from the results rail (see engine.js). The PLACE
+    // payload does carry it at [4][8], which is why a verification lookup needs
+    // no rail scraping at all.
     rating: num(at(rec, 4, 7)),
-    review_count: null,
+    review_count: num(at(rec, 4, 8)),
 
     // Contact
     phone,

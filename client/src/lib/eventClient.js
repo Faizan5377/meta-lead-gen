@@ -15,7 +15,8 @@ export const initialState = {
   businesses: [],
   index: {},             // business_key -> array index
   rejected: [],          // ads the niche gate dropped, for transparency
-  nicheProfile: null,    // categories the gate learned this run
+  nicheProfile: null,
+  mapsNiche: [],    // categories the gate learned this run
   errors: [],
   notices: [],           // e.g. "no ads for keyword X" — informational
   currentKeyword: null,
@@ -61,6 +62,7 @@ export function reducer(state, ev) {
       const phaseInfo = { ...state.phaseInfo };
       if (ev.phase === 'enriching') phaseInfo.enriching = { done: 0, total: ev.total || 0 };
       if (ev.phase === 'saving') phaseInfo.saving = { total: ev.total || 0 };
+      if (ev.phase === 'verifying') phaseInfo.verifying = { target: ev.target || 0 };
       return { ...state, phase: ev.phase, phaseInfo, ticker: phaseLabel(ev.phase) };
     }
 
@@ -68,6 +70,7 @@ export function reducer(state, ev) {
       return {
         ...state,
         nicheProfile: ev.nicheProfile ?? state.nicheProfile,
+        mapsNiche: ev.phase === 'learning' ? (ev.categories || []) : state.mapsNiche,
         saveResult: ev.phase === 'saving' ? { saved: ev.saved, remote: ev.remote } : state.saveResult,
         ticker: `${phaseLabel(ev.phase)} — done`,
       };
@@ -116,6 +119,35 @@ export function reducer(state, ev) {
         rejected: state.rejected.concat([{ name: ev.page_name, score: ev.score, reason: ev.reason }]).slice(-60),
       };
 
+    // Google confirmed the lead. The business already sits in the list as a
+    // candidate, so this patches the Maps fields onto it in place.
+    case 'business_verified': {
+      const key = ev.business.business_key ?? ev.business.library_id;
+      const i = state.index[key];
+      const businesses = state.businesses.slice();
+      if (i != null) businesses[i] = { ...businesses[i], ...ev.business };
+      return {
+        ...state, businesses,
+        counts: ev.counts || state.counts,
+        ticker: `Verified "${ev.business.page_name || '—'}"`,
+      };
+    }
+
+    // Google could not confirm it. The server has already removed it from the
+    // run, so drop it here too and rebuild the index — leaving a rejected lead
+    // on screen would contradict the count.
+    case 'business_unverified': {
+      const businesses = state.businesses.filter((b) => b.verify_status !== 'dropped'
+        && b.page_name !== ev.page_name);
+      const index = {};
+      businesses.forEach((b, i) => { index[b.business_key ?? b.library_id] = i; });
+      return {
+        ...state, businesses, index,
+        counts: ev.counts || state.counts,
+        rejected: state.rejected.concat([{ name: ev.page_name, reason: ev.reason, stage: 'maps' }]).slice(-60),
+      };
+    }
+
     case 'business_enriched': {
       const i = state.index[ev.business_key];
       const phaseInfo = {
@@ -162,7 +194,9 @@ export function reducer(state, ev) {
 
 function phaseLabel(p) {
   return {
+    learning: 'Learning what Google calls this trade',
     harvesting: 'Harvesting ads',
+    verifying: 'Verifying on Google Maps',
     enriching: 'Fetching advertiser details',
     saving: 'Saving to library',
     done: 'Done',
@@ -177,6 +211,7 @@ export function subscribeToRun(runId, onEvent) {
   const types = [
     'run_started', 'phase_started', 'phase_done', 'harvest_progress',
     'business_added', 'business_updated', 'business_enriched', 'ad_rejected',
+    'business_verified', 'business_unverified',
     'error', 'notice', 'run_finished',
   ];
   for (const t of types) es.addEventListener(t, handler);

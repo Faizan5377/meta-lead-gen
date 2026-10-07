@@ -51,6 +51,28 @@ The filter bar reproduces the Ad Library's own filters and their conditional beh
 
 Media type is disabled for the issues/elections/politics category, which Meta doesn't apply it to.
 
+### Filter by the ad's button
+
+Meta offers no CTA filter, so this one is applied to the harvested ad — and like every other gate here, a rejected ad **doesn't use up your target**.
+
+It's worth more than it looks. The button tells you what the ad is *for*: in a live HVAC run, "Apply now" was almost entirely contractors recruiting technicians and trade schools selling courses, while "Book now" and "Get quote" were the businesses actually chasing customers. There's a one-click **Customer-intent buttons only** preset for exactly that.
+
+### Verify every lead on Google Maps
+
+Tick this and each surviving advertiser is looked up on Google Maps, which attaches its **opening hours (full week), rating, review count, category, address and a Maps link** — and drops anything Google can't confirm. One run, one button; there's no second pass to trigger.
+
+Your target still means that many *finished* leads. Ask for 200 and the run keeps digging until 200 survive every gate, even if that means checking 2,000 advertisers.
+
+Three gates come with it:
+
+- **Only businesses in my trade.** Before harvesting, the run does one Maps search for your keyword and learns what Google calls this trade — for "HVAC" that's `HVAC contractor`, `air conditioning contractor`, `heating contractor`. Anything filed as something else is dropped.
+
+  This is the fix for irrelevant results, and it works where keyword scoring can't. A company that *sells to* or *trains* a trade talks about it constantly, so it scores **higher** than a real contractor with short ad copy — in one run Lincoln Tech scored 79 and a marketing agency 85, while genuine contractors sat at 44–45. Raising the relevance threshold would have dropped the contractors and kept the agencies. The Maps category doesn't have that problem.
+- **Only businesses open 24 hours.** Read from the full week on the listing, not just today. Pick which days must be round-the-clock — weekdays by default, so a firm that closes its office at weekends still counts.
+- **Minimum rating / reviews**, on Google's numbers.
+
+Every lead records *how* it was matched to its listing — shared domain, exact name, or close name — because a wrong join would attach someone else's rating to your lead.
+
 ---
 
 ## The library

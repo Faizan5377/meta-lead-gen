@@ -3,6 +3,7 @@
 // SQLite is handled by the orchestrator via db.js.
 
 import { randomUUID } from 'node:crypto';
+import { ctaMatches } from './filters.js';
 import { library } from './library.js';
 
 class RunStore {
@@ -21,11 +22,15 @@ class RunStore {
       target: filters.target,
       businesses: [],            // kept businesses (this run), insertion order
       businessByPage: new Map(), // dedup key -> business
+      rejectedKeys: new Set(),   // verification said no — don't pay to check twice
       counts: {
         rawSeen: 0,            // unique ads pulled off the feed
-        kept: 0,               // businesses kept (== businesses.length)
+        kept: 0,               // businesses CONFIRMED (see keptBusinesses)
         skippedKnown: 0,       // already in the shared library
         skippedIrrelevant: 0,  // failed the niche relevance gate
+        skippedCta: 0,         // the ad's button was not one you asked for
+        skippedUnverified: 0,  // Google Maps could not confirm it
+        verifiedDone: 0,       // Maps verification progress
         enrichedDone: 0,       // advertiser-detail enrichment progress
       },
       cancelRequested: false,
@@ -40,6 +45,32 @@ class RunStore {
 
   get(id) { return this.runs.get(id); }
 
+  // With Maps verification on, `businesses` holds CANDIDATES — a lead is only
+  // real once Google has confirmed it — so the target, the save and the export
+  // all have to ask for the confirmed ones rather than the whole array.
+  keptBusinesses(run) {
+    if (!run.filters?.verifyOnMaps) return run.businesses;
+    return run.businesses.filter((b) => b.verify_status === 'kept');
+  }
+
+  recount(run) {
+    run.counts.kept = this.keptBusinesses(run).length;
+    return run.counts.kept;
+  }
+
+  // Verification said no. The candidate leaves the array entirely so the
+  // snapshot stays small on a run that checks thousands to keep hundreds.
+  dropCandidate(run, business, reason) {
+    business.verify_status = 'dropped';
+    business.verify_reason = reason || null;
+    const i = run.businesses.indexOf(business);
+    if (i >= 0) run.businesses.splice(i, 1);
+    run.businessByPage.delete(business.business_key);
+    run.rejectedKeys.add(business.business_key);
+    run.counts.skippedUnverified++;
+    this.recount(run);
+  }
+
   // Decide what to do with one freshly-harvested ad. Returns
   // { status: 'added'|'updated'|'skipped', business? }.
   //
@@ -48,6 +79,10 @@ class RunStore {
     run.counts.rawSeen++;
     const key = businessKey(rec);
     if (!key) return { status: 'skipped' };
+
+    // Already checked and rejected in this run. Re-admitting it would cost
+    // another Maps lookup to reach the same answer.
+    if (run.rejectedKeys?.has(key)) return { status: 'skipped', rejectedBefore: true };
 
     // Check THIS run first: the same business often resurfaces under another
     // keyword or country, and we want to record that extra keyword. (The
@@ -59,6 +94,13 @@ class RunStore {
     if (!existing && (library.hasBusiness(key) || library.hasSeenAd(rec.library_id))) {
       run.counts.skippedKnown++;
       return { status: 'skipped', known: true };
+    }
+
+    // CTA gate. Free — the button is already in the feed record — so it runs
+    // before relevance scoring and long before anything that costs a page load.
+    if (!existing && !ctaMatches(rec, run.filters?.ctas || [])) {
+      run.counts.skippedCta++;
+      return { status: 'skipped', wrongCta: true };
     }
 
     // Niche gate. Meta's keyword search is loose, so an ad that isn't actually
@@ -91,12 +133,20 @@ class RunStore {
     // were asked for. Fewer only if the Ad Library genuinely runs out.
     // Note this guards new businesses only — updates to ones already kept (an
     // extra keyword, a longer-running ad) must still be applied above.
-    if (run.businesses.length >= run.target) return { status: 'skipped', atTarget: true };
+    // When Maps verification is on this counts CONFIRMED leads, so the harvest
+    // keeps digging while candidates fail — which is what makes "200" mean 200
+    // verified businesses rather than 200 attempts.
+    if (this.recount(run) >= run.target) return { status: 'skipped', atTarget: true };
 
-    const business = { ...rec, business_key: key, keywords: rec.keyword ? [rec.keyword] : [] };
+    const business = {
+      ...rec,
+      business_key: key,
+      keywords: rec.keyword ? [rec.keyword] : [],
+      ...(run.filters?.verifyOnMaps ? { verify_status: 'pending' } : {}),
+    };
     run.businesses.push(business);
     run.businessByPage.set(key, business);
-    run.counts.kept = run.businesses.length;
+    this.recount(run);
     return { status: 'added', business };
   }
 

@@ -18,6 +18,8 @@ import { library } from './library.js';
 import { createRelevanceGate } from './relevance.js';
 import { store } from './store.js';
 import { harvest, newPage } from './scraper/engine.js';
+import { startVerification } from './verify/phase.js';
+import { learnNiche } from './verify/niche.js';
 import { scrapeAdvertiserDetails } from './scraper/advertiserScraper.js';
 
 const countryName = (code) => COUNTRIES.find((c) => c.code === code)?.name || code;
@@ -32,6 +34,7 @@ export async function runPipeline(runId) {
   emit(runId, { type: 'run_started', snapshot: store.snapshot(run) });
 
   try {
+    if (run.filters.verifyOnMaps && !run.cancelRequested) await nichePhase(run);
     await harvestPhase(run);
     if (!run.cancelRequested && run.filters.enrichAdvertisers !== false) await enrichPhase(run);
     await savePhase(run);
@@ -59,6 +62,14 @@ async function harvestPhase(run) {
     : null;
   run.relevance = relevance;
 
+  // Verification runs ALONGSIDE the harvest, not after it. Its workers consume
+  // candidates as they arrive and only confirmed leads count toward the target,
+  // which is what lets the harvest keep digging past the first N attempts.
+  const verifier = run.filters.verifyOnMaps
+    ? startVerification(run, { emit: (ev) => emit(run.id, ev) })
+    : null;
+  if (verifier) emit(run.id, { type: 'phase_started', phase: 'verifying', target: run.target });
+
   await harvest({
     filters: run.filters,
     shouldStop: () => run.cancelRequested || run.counts.kept >= run.target,
@@ -66,7 +77,10 @@ async function harvestPhase(run) {
       const res = store.considerAd(run, rec, relevance);
 
       if (res.status === 'added' || res.status === 'updated') {
-        library.note(rec.library_id, res.business.business_key);
+        // With verification on, a candidate is not a lead yet — noting it in
+        // the library here would hide it from every future run even if Google
+        // ends up rejecting it.
+        if (!run.filters.verifyOnMaps) library.note(rec.library_id, res.business.business_key);
         emit(run.id, {
           type: res.status === 'added' ? 'business_added' : 'business_updated',
           business: res.business, counts: run.counts,
@@ -107,11 +121,51 @@ async function harvestPhase(run) {
     emit(run.id, { type: 'error', scope: 'harvest', message: err.message, recoverable: true });
   });
 
+  // The feed is exhausted; let the workers drain what is still queued.
+  if (verifier) {
+    verifier.harvestFinished();
+    if (run.cancelRequested) verifier.stop();
+    await verifier.promise;
+    for (const b of store.keptBusinesses(run)) library.note(b.library_id, b.business_key);
+    if (verifier.ranOutOfChecks()) {
+      const msg = `Stopped after ${run.counts.verifiedDone} Google Maps checks `
+        + `(the safety ceiling) with ${run.counts.kept} of ${run.target} confirmed.`;
+      run.errors.push({ scope: 'verify', message: msg, kind: 'notice', ts: now() });
+      emit(run.id, { type: 'notice', scope: 'verify', message: msg });
+    }
+    emit(run.id, {
+      type: 'phase_done', phase: 'verifying',
+      checked: run.counts.verifiedDone, kept: run.counts.kept,
+    });
+  }
+
   emit(run.id, {
     type: 'phase_done', phase: 'harvesting',
     kept: run.counts.kept,
     nicheProfile: relevance?.profile() || null,
   });
+}
+
+// ── Phase 0: what is this trade called on Google? ───────────────────────────
+// Skipped when you pinned the categories yourself, and when verification would
+// not use them anyway.
+async function nichePhase(run) {
+  const v = run.filters.verify;
+  if (v.niche.length || !v.nicheCheck) return;
+
+  run.phase = 'learning';
+  emit(run.id, { type: 'phase_started', phase: 'learning' });
+  const categories = await learnNiche({
+    keywords: run.filters.keywords,
+    region: (run.filters.countries || []).find((c) => c && c !== 'ALL')?.toLowerCase() || 'us',
+    shouldStop: () => run.cancelRequested,
+    onError: (e) => {
+      run.errors.push({ scope: 'niche', message: e.message, kind: 'notice', ts: now() });
+      emit(run.id, { type: 'notice', scope: 'niche', message: e.message });
+    },
+  });
+  v.niche = categories;
+  emit(run.id, { type: 'phase_done', phase: 'learning', categories });
 }
 
 // ── Phase 2: advertiser details ──────────────────────────────────────────────
@@ -120,7 +174,9 @@ async function harvestPhase(run) {
 // bio). One page load per advertiser, which is why it runs concurrently.
 async function enrichPhase(run) {
   run.phase = 'enriching';
-  const targets = run.businesses.filter((b) => b.page_id);
+  // Only confirmed leads — enrichment costs a page load each, and a rejected
+  // candidate is not going in the export.
+  const targets = store.keptBusinesses(run).filter((b) => b.page_id);
   emit(run.id, { type: 'phase_started', phase: 'enriching', total: targets.length });
   if (!targets.length) { emit(run.id, { type: 'phase_done', phase: 'enriching', done: 0 }); return; }
 
@@ -147,9 +203,10 @@ async function enrichPhase(run) {
 async function savePhase(run) {
   if (run.saved) return;
   run.phase = 'saving';
-  emit(run.id, { type: 'phase_started', phase: 'saving', total: run.businesses.length });
+  const toSave = store.keptBusinesses(run);
+  emit(run.id, { type: 'phase_started', phase: 'saving', total: toSave.length });
   try {
-    const res = await library.save(run.businesses, run.id);
+    const res = await library.save(toSave, run.id);
     await library.noteSeen(run.seenForLibrary || [], run.id);
     run.saved = true;
     run.saveResult = res;

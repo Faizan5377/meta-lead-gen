@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { normalizeVerifyFilters } from './verify/gate.js';
 
 // Canonical definitions of every filter the Meta Ad Library exposes, mirrored
 // so the app can reproduce any search. The client renders these; urlBuilder.js
@@ -85,6 +86,69 @@ export const MEDIA_TYPES = [
   { value: 'none', label: 'No image or video' },
 ];
 
+// ── Call to action ───────────────────────────────────────────────────────────
+//
+// The Ad Library has no CTA filter, so this one is applied after the fact, on
+// the `cta_text` the feed already gives us. It is Meta's own fixed button
+// vocabulary — the same kind of platform taxonomy as MEDIA_TYPES above, not a
+// list of niche words.
+//
+// `group` is the useful part. The button an advertiser picked says what the ad
+// is FOR, which is usually a sharper filter than the keyword: in a live HVAC
+// run, "Apply now" was almost entirely contractors recruiting technicians and
+// trade schools selling courses, while "Book now" and "Get quote" were the
+// businesses actually chasing customers.
+export const CTA_ACTIONS = [
+  { value: 'book now', label: 'Book now', group: 'Customer' },
+  { value: 'get quote', label: 'Get quote', group: 'Customer' },
+  { value: 'call now', label: 'Call now', group: 'Customer' },
+  { value: 'contact us', label: 'Contact us', group: 'Customer' },
+  { value: 'get offer', label: 'Get offer', group: 'Customer' },
+  { value: 'get in touch', label: 'Get in touch', group: 'Customer' },
+  { value: 'get promotions', label: 'Get promotions', group: 'Customer' },
+  { value: 'check availability', label: 'Check availability', group: 'Customer' },
+  { value: 'send message', label: 'Send message', group: 'Customer' },
+  { value: 'send whatsapp message', label: 'Send WhatsApp message', group: 'Customer' },
+  { value: 'get directions', label: 'Get directions', group: 'Customer' },
+
+  { value: 'apply now', label: 'Apply now', group: 'Hiring & courses' },
+  { value: 'sign up', label: 'Sign up', group: 'Hiring & courses' },
+  { value: 'learn more', label: 'Learn more', group: 'Awareness' },
+  { value: 'see details', label: 'See details', group: 'Awareness' },
+  { value: 'watch more', label: 'Watch more', group: 'Awareness' },
+  { value: 'listen now', label: 'Listen now', group: 'Awareness' },
+  { value: 'download', label: 'Download', group: 'Awareness' },
+  { value: 'subscribe', label: 'Subscribe', group: 'Awareness' },
+  { value: 'like page', label: 'Like Page', group: 'Awareness' },
+  { value: 'visit profile', label: 'Visit profile', group: 'Awareness' },
+  { value: 'visit instagram profile', label: 'Visit Instagram profile', group: 'Awareness' },
+  { value: 'open link', label: 'Open link', group: 'Awareness' },
+  { value: 'save', label: 'Save', group: 'Awareness' },
+  { value: 'interested', label: 'Interested', group: 'Awareness' },
+
+  { value: 'shop now', label: 'Shop now', group: 'Commerce' },
+  { value: 'order now', label: 'Order now', group: 'Commerce' },
+  { value: 'install now', label: 'Install now', group: 'Commerce' },
+
+  { value: 'none', label: 'No button', group: 'Other' },
+];
+
+const CTA_VALUES = new Set(CTA_ACTIONS.map((c) => c.value));
+
+// An ad with no button is a real result, not missing data, so it gets its own
+// value rather than being silently unfilterable.
+export const ctaValue = (business = {}) => {
+  const text = String(business.cta_text ?? '').trim().toLowerCase();
+  return text || 'none';
+};
+
+// Empty list means "any CTA" — a filter you did not ask for must never drop a
+// lead. Unknown buttons (Meta adds them) are kept unless you narrowed the list.
+export function ctaMatches(business, allowed = []) {
+  if (!allowed.length) return true;
+  return allowed.includes(ctaValue(business));
+}
+
 // ── Publisher platforms (multi-select) ───────────────────────────────────────
 export const PLATFORMS = [
   { value: 'facebook', label: 'Facebook' },
@@ -146,6 +210,8 @@ export const FILTER_HELP = {
   languages: 'The language of the ad’s content. Leave empty for all languages.',
   dateRange: 'Filters by when the ad started running (Meta’s “Impressions by date”). Pick a from/to range.',
   target: 'How many unique businesses to collect before the harvest stops. One ad is kept per business (its longest-running one).',
+  ctas: 'The button on the ad. Meta has no CTA filter, so this is applied to the harvested ad — and a rejected ad never uses up your target. The button says what the ad is FOR: “Apply now” is overwhelmingly recruiting and course ads, “Book now” and “Get quote” are businesses chasing customers.',
+  verifyOnMaps: 'Look every surviving advertiser up on Google Maps and attach its opening hours, rating, review count, category and Maps link — then drop the ones that do not match. Costs one Maps visit per advertiser, so runs take longer and dig deeper.',
 };
 
 // Everything the client needs to render the filter panel, in one payload.
@@ -158,6 +224,7 @@ export const FILTER_META = {
   adCategories: AD_CATEGORIES,
   activeStatuses: ACTIVE_STATUSES,
   mediaTypes: MEDIA_TYPES,
+  ctas: CTA_ACTIONS,
   platforms: [...PLATFORMS].sort((a, b) => a.label.localeCompare(b.label)),
   languages: [...LANGUAGES].sort((a, b) => a.label.localeCompare(b.label)),
   matchTypes: MATCH_TYPES,
@@ -232,6 +299,13 @@ export function normalizeFilters(body = {}) {
   // words — data supplied per run, never hardcoded verticals.
   const nicheTerms = (Array.isArray(body.nicheTerms) ? body.nicheTerms : String(body.nicheTerms || '').split(','))
     .map((t) => String(t).trim()).filter(Boolean).slice(0, 25);
+  // The ad's button. Meta offers no CTA filter, so this is applied to the
+  // harvested ad — and like the niche gate, a rejected ad never consumes the
+  // target, so narrowing it makes the list better rather than shorter.
+  const ctas = (Array.isArray(body.ctas) ? body.ctas : [])
+    .map((c) => String(c).trim().toLowerCase())
+    .filter((c) => CTA_VALUES.has(c));
+
   const relevanceEnabled = body.relevanceEnabled !== false;
   const minRelevance = Number.isFinite(Number(body.minRelevance))
     ? Math.max(0, Math.min(100, Number(body.minRelevance)))
@@ -244,8 +318,11 @@ export function normalizeFilters(body = {}) {
       countries, adType, activeStatus, mediaType: effectiveMediaType,
       platforms, languages, matchType, sort, startDateMin, startDateMax, target,
       advertiserIds: (Array.isArray(body.advertiserIds) ? body.advertiserIds : []).map(String).slice(0, 50),
-      relevanceEnabled, nicheTerms, minRelevance,
+      relevanceEnabled, nicheTerms, minRelevance, ctas,
       enrichAdvertisers: body.enrichAdvertisers !== false,
+      // Google Maps verification: hours, rating, reviews and the niche check.
+      verifyOnMaps: body.verifyOnMaps === true,
+      verify: normalizeVerifyFilters(body.verify ?? body),
     },
     errors,
   };
