@@ -81,16 +81,33 @@ Google already draws the line: contractors are filed as `HVAC contractor`, the o
    So a 24-hour check must reach the place panel — `lookupPlace` clicks the top card when Maps stops on the rail. `findPlaceRecord` matches on **shape** (feature id at `[10]`, name at `[11]`) because the record's root moves between payloads.
 3. **`verify/gate.js`** is pure and unit-tested: the hours rule, the advertiser↔listing join, the niche test. A wrong join attaches someone else's rating to your lead, so a match must be **evidenced** — shared domain (95), exact name after stripping legal noise (85), or ≥0.8 token overlap (70) — and the evidence is stored on the lead as `maps_match`.
 
-### The target counts VERIFIED leads, not candidates
+### The target is the RAW harvest, not the finished list
 
-This is the part that trips you up. With verification on, `run.businesses` holds **candidates**; a lead is real only once Google confirms it.
+This reversed. It used to mean "200 finished leads, dig as deep as needed"; it now means "collect 200 advertisers, then filter them down". Asking for 10,000 is expected to yield 1,000–2,000 contactable leads.
 
-- `store.keptBusinesses(run)` is the authority — target, save, export and enrichment all go through it, never `run.businesses` directly.
-- `counts.kept` counts confirmed leads, which is what the harvest's `shouldStop` reads, so **a run that keeps 200 may check 2,000**.
-- Verification runs **alongside** the harvest (`verify/phase.js`), not after it. A phase that waited for the harvest could not tell it to keep digging.
-- `library.note()` is deferred until a lead is confirmed — noting a candidate would hide it from every future run even after Google rejected it.
-- A dropped candidate is spliced out of `run.businesses` and its key remembered in `run.rejectedKeys`, so the snapshot stays small and it is never re-checked.
-- `config.verify.maxChecks` (4000) is the safety rail; the run reports honestly when it hits it.
+- `counts.harvested` is the target, incremented **cumulatively** on admission and never decremented. A candidate dropped later by Maps or Hunter must not reopen a slot, or the run chases a moving total.
+- `counts.kept` is what survived everything, and is what the UI and the save use.
+- `store.keptBusinesses(run)` / `maps.keptPlaces(run)` are the only honest views of a run. Never read `run.businesses` or `run.places` directly — they hold candidates, and the CSV is exactly where an unenriched one must not appear.
+
+### One lead shape, both scrapers
+
+[leadSchema.js](server/src/leadSchema.js) is the whole export: 13 columns, identical whichever scraper found the lead. Before this, the Ad Library exported 38 columns and Maps 24, sharing only `country` and `maps_url` — two lists that could not be stacked.
+
+**The headers are load-bearing.** They are exactly what the Ventix Outreach importer (`outreach/leads.py` in `/Users/faizan/Ventix/Enricher`) auto-detects, so a CSV from here loads into a campaign with no column mapping: `Business Name`→company, `Website`→domain, `First Name`/`Last Name`, `Position`, `Owner Email`→email, `Owner Phone`/`Business Phone`→phone. Renaming one silently breaks that hand-off; `test/leadSchema.test.js` guards it.
+
+`Designation` (Owner / CEO / President / Vice President) is the normalized rung you filter on; `Position` is Hunter's exact title (*"Co-Founder & President"*) and is what `{{position}}` renders in a template. Both are kept on purpose.
+
+### Hunter.io: one decision maker per business
+
+`server/src/enrich/`. Ported from the Python enricher, and the pipeline's last and most expensive gate.
+
+- **[hierarchy.js](server/src/enrich/hierarchy.js)** picks exactly ONE person: Owner → CEO → President → VP, and **null** when nobody reaches that bar — which drops the lead. Emailing every contact at a domain is how a sending domain gets burned. Watch the two traps the tests pin down: "Vice President" contains "President" (so tier 3 excludes it explicitly, and tier 4 must then also catch "Deputy President"), and "Executive Assistant to the CEO" must never read as a CEO.
+- **[hunter.js](server/src/enrich/hunter.js)** holds the API client. `CreditBudget.reserve()` takes a credit **before** the call and tracks `inFlight`: Hunter bills per search that returns people, several workers run at once, and counting only on the way out lets a run overshoot its cap by however many searches were in flight. `cleanDomain` rejects social links — 19% of Ad Library leads point at `fb.me` or `api.whatsapp.com`, and searching those spends a credit to be told about Meta's staff.
+- **401 ≠ 429.** Invalid key and exhausted account both stop the run; reporting the wrong one sends you hunting a problem you don't have.
+
+Credits are the binding constraint, not runtime: a Starter plan is 2,000 searches a month, and 10,000 leads at a ~60% hit rate needs ~6,000. `npm run hunter:account` prints the balance. Every run takes a `hunterMaxCredits` cap and reports honestly when it hits it.
+
+**Apollo goes here.** `enrich/phase.js` is provider-shaped on purpose: phone lookup and email re-verification become extra steps over the same leads, filling `owner_phone`, without the pipeline changing shape.
 
 ### Filtering on the ad's button (CTA)
 
@@ -98,12 +115,12 @@ This is the part that trips you up. With verification on, `run.businesses` holds
 
 The `group` field earns its keep: the button says what the ad is **for**. In a live HVAC run, "Apply now" was almost entirely contractors recruiting technicians and trade schools selling courses, while "Book now" and "Get quote" were businesses chasing customers. It is often a sharper filter than the keyword.
 
-### The run target is a hard ceiling
+### The harvest ceiling is still hard
 
-Two independent guards, because this was a real bug (asking for 3 returned 15):
+The target changed meaning (above), but it is still a ceiling the harvest cannot exceed — asking for 3 once returned 15. Two independent guards:
 
 1. `drain()` in engine.js re-checks `shouldStop` **after every record**, stopping mid-buffer. Meta's feed arrives a page at a time.
-2. `store.considerAd` refuses new businesses past the target.
+2. `store.considerAd` refuses new businesses past `counts.harvested >= target`.
 
 Guard 2 deliberately allows **updates** to businesses already kept (extra keyword, longer-running ad). `MAX_TARGET` (2500) is enforced in `normalizeFilters`.
 

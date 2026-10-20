@@ -23,13 +23,18 @@ class RunStore {
       businesses: [],            // kept businesses (this run), insertion order
       businessByPage: new Map(), // dedup key -> business
       rejectedKeys: new Set(),   // verification said no — don't pay to check twice
+      contactDrops: new Map(),   // why Hunter rejected leads, for the run summary
       counts: {
         rawSeen: 0,            // unique ads pulled off the feed
-        kept: 0,               // businesses CONFIRMED (see keptBusinesses)
+        harvested: 0,          // advertisers pulled off the feed — THIS is the target
+        kept: 0,               // contactable leads left after verification + Hunter
         skippedKnown: 0,       // already in the shared library
         skippedIrrelevant: 0,  // failed the niche relevance gate
         skippedCta: 0,         // the ad's button was not one you asked for
         skippedUnverified: 0,  // Google Maps could not confirm it
+        skippedNoContact: 0,   // Hunter found no decision maker
+        enrichedContacts: 0,   // Hunter lookups completed
+        creditsUsed: 0,        // Hunter search credits spent this run
         verifiedDone: 0,       // Maps verification progress
         enrichedDone: 0,       // advertiser-detail enrichment progress
       },
@@ -49,8 +54,11 @@ class RunStore {
   // real once Google has confirmed it — so the target, the save and the export
   // all have to ask for the confirmed ones rather than the whole array.
   keptBusinesses(run) {
-    if (!run.filters?.verifyOnMaps) return run.businesses;
-    return run.businesses.filter((b) => b.verify_status === 'kept');
+    let list = run.businesses;
+    if (run.filters?.verifyOnMaps) list = list.filter((b) => b.verify_status === 'kept');
+    // Once Hunter has run, a lead with nobody to email is not a lead.
+    if (run.enrichmentDone) list = list.filter((b) => !!b.owner_email);
+    return list;
   }
 
   recount(run) {
@@ -142,10 +150,10 @@ class RunStore {
     // were asked for. Fewer only if the Ad Library genuinely runs out.
     // Note this guards new businesses only — updates to ones already kept (an
     // extra keyword, a longer-running ad) must still be applied above.
-    // When Maps verification is on this counts CONFIRMED leads, so the harvest
-    // keeps digging while candidates fail — which is what makes "200" mean 200
-    // verified businesses rather than 200 attempts.
-    if (this.recount(run) >= run.target) return { status: 'skipped', atTarget: true };
+    // The target is how many advertisers to COLLECT, not how many survive.
+    // Counted cumulatively: a candidate dropped later by Maps or Hunter must
+    // not reopen a slot, or the run would quietly chase a moving total.
+    if (run.counts.harvested >= run.target) return { status: 'skipped', atTarget: true };
 
     const business = {
       ...rec,
@@ -155,6 +163,7 @@ class RunStore {
     };
     run.businesses.push(business);
     run.businessByPage.set(key, business);
+    run.counts.harvested++;
     this.recount(run);
     return { status: 'added', business };
   }
@@ -177,6 +186,7 @@ class RunStore {
       filters: run.filters,
       target: run.target,
       counts: run.counts,
+      contactDrops: Object.fromEntries(run.contactDrops || []),
       businesses: this.keptBusinesses(run),
       errors: run.errors.slice(-100),
       startedAt: run.startedAt,

@@ -32,9 +32,15 @@ You can widen the niche with your own related terms per run. That's data you sup
 
 A live sample of 30 ads for "plumbing" kept 20 genuine plumbing/HVAC businesses and dropped a cholesterol community, a jewellery brand, a book and an auto service.
 
-### What you get per advertiser
+### What you get per lead
 
-Business name · **direct ad URL** · Facebook page · days running · started date · active status · **number of ads running** · **platforms** (Facebook / Instagram / Messenger / Threads / Audience Network) · **Facebook followers** · Instagram followers & handle (optional) · page categories · country · matched keyword(s) · relevance score & reason · headline · ad copy · CTA · destination URL · domain · media format · image/video URL · library id · page id.
+The same 13 columns whichever scraper found it, so the two lists stack into one outreach file:
+
+**Business Name** · **Website** · **Business Phone** · **First Name** · **Last Name** · **Designation** · **Position** · **Owner Email** · **Email Confidence** · **Owner Phone** · **Category** · **City** · **Source**
+
+`Designation` is the normalized rung — Owner, CEO, President or Vice President — and `Position` is the exact job title Hunter has on file. `Owner Phone` is reserved for the Apollo step and is blank for now.
+
+The headers match what the Ventix Outreach importer expects, so a CSV from here loads straight into a campaign with no column mapping.
 
 ---
 

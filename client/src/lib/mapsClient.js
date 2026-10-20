@@ -54,7 +54,8 @@ export function mapsReducer(state, ev) {
       return { ...fromSnapshot(state, ev.snapshot), status: 'running', phase: 'searching', ticker: 'Starting…', errors: [], notices: [], rejects: [], rejectTally: {} };
 
     case 'phase_started':
-      return { ...state, phase: ev.phase, ticker: ev.phase === 'saving' ? 'Saving to library…' : 'Searching Google Maps…' };
+      return { ...state, phase: ev.phase, ticker: ev.phase === 'saving' ? 'Saving to library…'
+        : ev.phase === 'contacts' ? 'Finding decision makers…' : 'Searching Google Maps…' };
 
     case 'phase_done':
       return {
@@ -93,6 +94,36 @@ export function mapsReducer(state, ev) {
         rejectTally: { ...state.rejectTally, [key]: (state.rejectTally[key] || 0) + 1 },
       };
     }
+
+    case 'contact_found': {
+      const id = ev.place.feature_id;
+      const i = state.index[id];
+      const places = state.places.slice();
+      if (i != null) places[i] = { ...places[i], ...ev.place };
+      return {
+        ...state, places,
+        counts: ev.counts || state.counts,
+        ticker: `Found ${ev.place.owner_email || 'a contact'} at "${ev.place.name}"`,
+      };
+    }
+
+    case 'contact_missing': {
+      const places = state.places.filter((p) => p.name !== ev.name);
+      const index = {};
+      places.forEach((p, i) => { index[p.feature_id] = i; });
+      return {
+        ...state, places, index,
+        counts: ev.counts || state.counts,
+        rejects: state.rejects.concat([{ name: ev.name, reason: ev.reason }]).slice(-50),
+      };
+    }
+
+    case 'contact_progress':
+      return {
+        ...state,
+        counts: ev.counts || state.counts,
+        ticker: `Finding decision makers — ${ev.done}/${ev.total} (${ev.creditsUsed} credits)`,
+      };
 
     // Review counts arrive after the rail finishes rendering, so the server
     // sends a corrected snapshot rather than us losing them.
@@ -135,6 +166,7 @@ export function subscribeToMapsRun(runId, onEvent) {
   const types = [
     'run_started', 'phase_started', 'phase_done', 'search_progress',
     'place_added', 'place_rejected', 'places_patched',
+    'contact_found', 'contact_missing', 'contact_progress',
     'error', 'notice', 'run_finished',
   ];
   for (const t of types) es.addEventListener(t, handler);

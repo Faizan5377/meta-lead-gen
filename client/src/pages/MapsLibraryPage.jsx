@@ -2,7 +2,8 @@ import {
   Check, ChevronRight, Download, Layers, Loader2, MapPin, Pencil, Search, Trash2, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { PlacesTable } from './MapsPage.jsx';
+import LeadsTable from '../components/LeadsTable.jsx';
+import { placeLead } from '../lib/lead.js';
 import { api } from '../lib/api.js';
 
 // Same execution-based layout as the Ad Library: one collapsible row per search
@@ -159,7 +160,7 @@ export default function MapsLibraryPage({ onLibraryChanged }) {
                   )}
                   {bucket.error && <div className="px-2 py-4 text-sm text-red-600">{bucket.error}</div>}
                   {bucket.rows && (bucket.rows.length
-                    ? <PlacesTable places={bucket.rows} compact />
+                    ? <LeadsTable leads={bucket.rows.map(placeLead)} compact />
                     : <div className="px-2 py-6 text-sm text-slate-400">This execution collected no places.</div>)}
                 </div>
               )}

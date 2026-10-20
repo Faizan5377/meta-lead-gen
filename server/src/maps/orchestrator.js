@@ -14,6 +14,8 @@ import { bus } from '../eventStream.js';
 import { placesLibrary } from './library.js';
 import { harvest } from './engine.js';
 import { judge } from './quality.js';
+import { enrichLeads } from '../enrich/phase.js';
+import { fromPlace } from '../leadSchema.js';
 
 const runs = new Map();
 
@@ -31,7 +33,13 @@ export function createRun(filters) {
     byId: new Map(),           // feature id -> place
     seen: new Set(),           // every feature id considered, kept or not
     categories: new Map(),     // what Google calls this niche — learned, never hardcoded
-    counts: { found: 0, kept: 0, skippedKnown: 0, skippedFiltered: 0 },
+    counts: {
+      found: 0,
+      harvested: 0,        // places collected — THIS is the target
+      kept: 0,             // contactable leads left after Hunter
+      skippedKnown: 0, skippedFiltered: 0,
+      skippedNoContact: 0, enrichedContacts: 0, creditsUsed: 0,
+    },
     rejectReasons: new Map(),  // reason -> how many, for the shortfall advice
     cancelRequested: false,
     startedAt: null, finishedAt: null, stoppedAt: null,
@@ -43,11 +51,16 @@ export function createRun(filters) {
 
 export const getRun = (id) => runs.get(id);
 
+// After Hunter, a place with nobody to email is not a lead.
+export function keptPlaces(run) {
+  return run.enrichmentDone ? run.places.filter((p) => !!p.owner_email) : run.places;
+}
+
 export function snapshot(run) {
   return {
     id: run.id, kind: 'maps', name: run.name, createdAt: run.createdAt,
     status: run.status, phase: run.phase, filters: run.filters, target: run.target,
-    counts: run.counts, places: run.places, errors: run.errors.slice(-100),
+    counts: run.counts, places: keptPlaces(run), errors: run.errors.slice(-100),
     // The exact tally, so a reloaded page shows what the filters dropped
     // rather than only what has streamed in since.
     rejectReasons: Object.fromEntries(run.rejectReasons),
@@ -74,6 +87,7 @@ export async function runPipeline(runId) {
 
   try {
     await searchPhase(run);
+    if (!run.cancelRequested) await hunterPhase(run);
     await savePhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
@@ -91,11 +105,11 @@ async function searchPhase(run) {
 
   await harvest({
     filters: run.filters,
-    shouldStop: () => run.cancelRequested || run.counts.kept >= run.target,
+    shouldStop: () => run.cancelRequested || run.counts.harvested >= run.target,
     // Google caps one search at ~120 results, so a strict quality gate can
     // leave a target unfilled. This tells the engine to sweep nearby viewports
     // — but only while the target is genuinely short.
-    needsMore: () => !run.cancelRequested && run.counts.kept < run.target,
+    needsMore: () => !run.cancelRequested && run.counts.harvested < run.target,
     relatedTerms: () => learnedCategories(run),
     onPlace: (p) => {
       // The area sweep deliberately re-runs the same search over overlapping
@@ -129,15 +143,16 @@ async function searchPhase(run) {
         return true;
       }
 
-      // Hard ceiling.
-      if (run.places.length >= run.target) return false;
+      // Hard ceiling on the RAW harvest; Hunter shrinks the list afterwards.
+      if (run.counts.harvested >= run.target) return false;
 
       run.places.push(p);
       run.byId.set(p.feature_id, p);
+      run.counts.harvested++;
       run.counts.kept = run.places.length;
       placesLibrary.note(p.feature_id, p.place_id);
       emit(run.id, { type: 'place_added', place: p, counts: run.counts });
-      return run.places.length < run.target;
+      return run.counts.harvested < run.target;
     },
     // The rail finishes rendering after places have already streamed out, so
     // patch review counts onto what we kept rather than losing them.
@@ -225,12 +240,66 @@ export function adviseOnShortfall(run) {
   emit(run.id, { type: 'notice', scope: 'shortfall', message });
 }
 
+// The same decision-maker step the Ad Library runs — one shared module, so a
+// Maps lead and a Meta lead are enriched identically and stack into one list.
+async function hunterPhase(run) {
+  if (run.filters.enrichWithHunter === false) return;
+  if (!config.hunter.apiKey) {
+    const msg = 'No Hunter API key set (HUNTER_API_KEY) — leads have no contact details.';
+    run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
+    emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
+    return;
+  }
+
+  run.phase = 'contacts';
+  emit(run.id, { type: 'phase_started', phase: 'contacts', total: run.places.length });
+
+  for (const p of run.places) {
+    const lead = fromPlace(p);
+    p.website = lead.website;
+    p.business_name = lead.business_name;
+  }
+
+  const res = await enrichLeads(run.places, {
+    maxCredits: run.filters.hunterMaxCredits ?? config.hunter.defaultMaxCredits,
+    shouldStop: () => run.cancelRequested,
+    onLead: (lead) => {
+      run.counts.enrichedContacts++;
+      emit(run.id, { type: 'contact_found', place: lead, counts: run.counts });
+    },
+    onDrop: (lead, reason) => {
+      run.counts.skippedNoContact++;
+      emit(run.id, { type: 'contact_missing', name: lead.business_name, reason, counts: run.counts });
+    },
+    onProgress: ({ done, total, creditsUsed }) => {
+      run.counts.creditsUsed = creditsUsed;
+      emit(run.id, { type: 'contact_progress', done, total, creditsUsed, counts: run.counts });
+    },
+    onError: (info) => {
+      run.errors.push({ scope: 'hunter', message: info.message, ts: now() });
+      emit(run.id, { type: 'error', scope: 'hunter', message: info.message, recoverable: !info.fatal });
+    },
+  });
+
+  run.enrichmentDone = true;
+  run.counts.creditsUsed = res.creditsUsed;
+  run.counts.kept = keptPlaces(run).length;
+
+  if (res.stoppedEarly && res.dropped.length) {
+    const msg = res.fatal
+      || `Hunter credit limit reached after ${res.creditsUsed} searches — later leads were not checked.`;
+    run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
+    emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
+  }
+  emit(run.id, { type: 'phase_done', phase: 'contacts', kept: run.counts.kept, credits: res.creditsUsed });
+}
+
 async function savePhase(run) {
   if (run.saved) return;
   run.phase = 'saving';
-  emit(run.id, { type: 'phase_started', phase: 'saving', total: run.places.length });
+  emit(run.id, { type: 'phase_started', phase: 'saving', total: keptPlaces(run).length });
   try {
-    const res = await placesLibrary.save(run.places, run.id);
+    const res = await placesLibrary.save(keptPlaces(run), run.id);
     run.saved = true;
     run.saveResult = res;
     emit(run.id, { type: 'phase_done', phase: 'saving', saved: res.saved, remote: res.remote });

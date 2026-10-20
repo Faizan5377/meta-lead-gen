@@ -63,6 +63,7 @@ export function reducer(state, ev) {
       if (ev.phase === 'enriching') phaseInfo.enriching = { done: 0, total: ev.total || 0 };
       if (ev.phase === 'saving') phaseInfo.saving = { total: ev.total || 0 };
       if (ev.phase === 'verifying') phaseInfo.verifying = { target: ev.target || 0 };
+      if (ev.phase === 'contacts') phaseInfo.contacts = { done: 0, total: ev.total || 0, credits: 0 };
       return { ...state, phase: ev.phase, phaseInfo, ticker: phaseLabel(ev.phase) };
     }
 
@@ -148,6 +149,41 @@ export function reducer(state, ev) {
       };
     }
 
+    // Hunter found the decision maker: patch the contact onto the business.
+    case 'contact_found': {
+      const key = ev.business.business_key ?? ev.business.library_id;
+      const i = state.index[key];
+      const businesses = state.businesses.slice();
+      if (i != null) businesses[i] = { ...businesses[i], ...ev.business };
+      return {
+        ...state, businesses,
+        counts: ev.counts || state.counts,
+        ticker: `Found ${ev.business.first_name || ''} ${ev.business.last_name || ''}`.trim()
+          + ` at "${ev.business.business_name || '—'}"`,
+      };
+    }
+
+    // No one to email: the server dropped the lead, so drop it here too.
+    case 'contact_missing': {
+      const businesses = state.businesses.filter((b) =>
+        (b.maps_name || b.page_name) !== ev.page_name);
+      const index = {};
+      businesses.forEach((b, i) => { index[b.business_key ?? b.library_id] = i; });
+      return {
+        ...state, businesses, index,
+        counts: ev.counts || state.counts,
+        rejected: state.rejected.concat([{ name: ev.page_name, reason: ev.reason, stage: 'hunter' }]).slice(-60),
+      };
+    }
+
+    case 'contact_progress':
+      return {
+        ...state,
+        counts: ev.counts || state.counts,
+        phaseInfo: { ...state.phaseInfo, contacts: { done: ev.done, total: ev.total, credits: ev.creditsUsed } },
+        ticker: `Finding decision makers — ${ev.done}/${ev.total} (${ev.creditsUsed} credits)`,
+      };
+
     case 'business_enriched': {
       const i = state.index[ev.business_key];
       const phaseInfo = {
@@ -196,6 +232,7 @@ function phaseLabel(p) {
   return {
     learning: 'Learning what Google calls this trade',
     harvesting: 'Harvesting ads',
+    contacts: 'Finding decision makers',
     verifying: 'Verifying on Google Maps',
     enriching: 'Fetching advertiser details',
     saving: 'Saving to library',
@@ -212,6 +249,7 @@ export function subscribeToRun(runId, onEvent) {
     'run_started', 'phase_started', 'phase_done', 'harvest_progress',
     'business_added', 'business_updated', 'business_enriched', 'ad_rejected',
     'business_verified', 'business_unverified',
+    'contact_found', 'contact_missing', 'contact_progress',
     'error', 'notice', 'run_finished',
   ];
   for (const t of types) es.addEventListener(t, handler);

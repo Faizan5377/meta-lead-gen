@@ -4,7 +4,8 @@ import ExportButton from '../components/ExportButton.jsx';
 import FilterPanel from '../components/FilterPanel.jsx';
 import MetricsBar from '../components/MetricsBar.jsx';
 import ProgressPanel from '../components/ProgressPanel.jsx';
-import ResultsTable from '../components/ResultsTable.jsx';
+import LeadsTable from '../components/LeadsTable.jsx';
+import { metaLead } from '../lib/lead.js';
 import { api } from '../lib/api.js';
 import { initialState, reducer, subscribeToRun } from '../lib/eventClient.js';
 
@@ -14,9 +15,10 @@ const DEFAULT_FILTERS = {
   startDateMin: '', startDateMax: '', sort: 'impressions', target: 100,
   relevanceEnabled: true, nicheTerms: [], enrichAdvertisers: true,
   ctas: [],
+  enrichWithHunter: true, hunterMaxCredits: undefined,
   // Google Maps verification. Off by default — it costs a Maps visit per
   // advertiser, so it has to be a deliberate choice.
-  verifyOnMaps: false,
+  verifyOnMaps: true,
   verify: {
     require24h: false,
     hoursDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
@@ -152,7 +154,7 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
           <>
             <MetricsBar metrics={metrics} />
             <ProgressPanel state={state} />
-            <ResultsTable businesses={state.businesses} />
+            <LeadsTable leads={state.businesses.map(metaLead)} />
           </>
         ) : (
           <EmptyState stats={stats} onGoToLibrary={onGoToLibrary} />

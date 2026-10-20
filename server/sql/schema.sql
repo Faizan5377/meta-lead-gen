@@ -29,6 +29,16 @@ create table if not exists public.ads (
 
   cta_text                  text,
   cta_type                  text,
+  -- Decision maker (Hunter.io), one per business. Owner Phone is filled by
+  -- Apollo later; the column exists now so the schema does not move.
+  first_name                text,
+  last_name                 text,
+  designation               text,
+  position                  text,
+  owner_email               text,
+  email_confidence          integer,
+  owner_phone               text,
+
 
   -- Google Maps verification (see src/verify/). Prefixed because the rating
   -- here is Google's, not Meta's.
@@ -39,6 +49,7 @@ create table if not exists public.ads (
   maps_hours                text,
   maps_open_24h             boolean,
   maps_address              text,
+  maps_city                 text,
   maps_phone                text,
   maps_website              text,
   maps_url                  text,
@@ -174,6 +185,16 @@ create table if not exists public.places (
   phone_e164      text,
   website         text,
   website_domain  text,
+
+  -- Decision maker (Hunter.io), one per business. Same columns as public.ads,
+  -- so leads from either scraper stack into one outreach list.
+  first_name        text,
+  last_name         text,
+  designation       text,
+  position          text,
+  owner_email       text,
+  email_confidence  integer,
+  owner_phone       text,
 
   hours           jsonb,
   open_state      text,

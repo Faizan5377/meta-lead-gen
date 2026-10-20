@@ -69,6 +69,17 @@ export const config = {
     maxRunMs: num(process.env.MAPS_MAX_RUN_MS, 60 * 60 * 1000),
   },
 
+  // Hunter.io decision-maker enrichment.
+  //
+  // Hunter bills one SEARCH credit per domain that returns people (a search
+  // finding nobody is free), so maxCredits is a real spend cap, not a tuning
+  // knob. Check the balance with `npm run hunter:account`.
+  hunter: {
+    apiKey: process.env.HUNTER_API_KEY || '',
+    concurrency: num(process.env.HUNTER_CONCURRENCY, 5),   // Hunter allows 15 req/s
+    defaultMaxCredits: num(process.env.HUNTER_MAX_CREDITS, 500),
+  },
+
   // Google Maps verification of Ad Library leads.
   //
   // Every advertiser that clears the cheap gates costs one Maps visit, so a

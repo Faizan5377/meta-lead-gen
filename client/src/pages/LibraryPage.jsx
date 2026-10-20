@@ -3,7 +3,8 @@ import {
   Search, Trash2, X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import ResultsTable from '../components/ResultsTable.jsx';
+import LeadsTable from '../components/LeadsTable.jsx';
+import { metaLead } from '../lib/lead.js';
 import { api } from '../lib/api.js';
 
 // The library is organised by EXECUTION, not as one flat pile of ads. Each run
@@ -204,7 +205,7 @@ export default function LibraryPage({ stats, onLibraryChanged }) {
                   )}
                   {bucket.rows && (
                     bucket.rows.length
-                      ? <ResultsTable businesses={bucket.rows} compact />
+                      ? <LeadsTable leads={bucket.rows.map(metaLead)} compact />
                       : <div className="px-2 py-6 text-sm text-slate-400 dark:text-slate-500">This execution collected no ads.</div>
                   )}
                 </div>

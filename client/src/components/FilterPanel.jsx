@@ -208,6 +208,38 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
             </button>
           </Field>
 
+
+          {/* ── Decision maker ── */}
+          <div className="sm:col-span-2 lg:col-span-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 dark:border-slate-700 dark:bg-slate-800/50">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox" checked={filters.enrichWithHunter !== false} disabled={running}
+                  onChange={(e) => set({ enrichWithHunter: e.target.checked })}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400 dark:border-slate-600"
+                />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Find the decision maker (Hunter.io)</span>
+                <InfoTip text="Looks the business website up on Hunter and takes ONE contact, the most senior: Owner, then CEO, then President, then Vice President. A business with nobody at that level is dropped — a lead you cannot email is not a lead." />
+              </label>
+              <div className="mt-1 pl-6 text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+                Your target is the number of businesses to <em>collect</em>; this step then removes the
+                ones with no reachable decision maker, so the finished list is smaller.
+              </div>
+              {filters.enrichWithHunter !== false && (
+                <div className="mt-3 grid gap-3 pl-6 sm:grid-cols-2">
+                  <Field label={<>Credit limit for this run <InfoTip text="Hunter charges one search credit per website that returns people; one that finds nobody is free. The run stops looking once it hits this number and tells you." /></>}>
+                    <input
+                      type="number" min={0} step={25} value={filters.hunterMaxCredits ?? ''}
+                      placeholder="500 (default)" disabled={running}
+                      onChange={(e) => set({ hunterMaxCredits: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0) })}
+                      className={NUM}
+                    />
+                  </Field>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* ── Google Maps verification ── */}
           <div className="sm:col-span-2 lg:col-span-4">
             <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/50 p-3.5">
@@ -331,7 +363,9 @@ function countActive(f, meta) {
   if (!f.relevanceEnabled) n++;
   if (f.minRelevance != null) n++;
   if (f.ctas?.length) n++;
-  if (f.verifyOnMaps) n++;
+  if (f.verifyOnMaps === false) n++;
+  if (f.enrichWithHunter === false) n++;
+  if (f.hunterMaxCredits != null) n++;
   return n;
 }
 

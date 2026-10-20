@@ -220,6 +220,9 @@ function normalizeMapsFilters(body = {}) {
       expandRing: Math.max(1, Math.min(3, Number(body.expandRing) || 2)),
       // Full lead-quality control lives in one validated object.
       quality: normalizeQuality(body.quality ?? body),
+      // Same decision-maker enrichment the Ad Library runs.
+      enrichWithHunter: body.enrichWithHunter !== false,
+      hunterMaxCredits: Math.max(0, Number(body.hunterMaxCredits) || 0) || undefined,
     },
     errors,
   };
@@ -279,7 +282,7 @@ app.get('/api/maps/runs/:id/export', async (req, reply) => {
   }
   reply.header('Content-Type', 'text/csv; charset=utf-8')
     .header('Content-Disposition', `attachment; filename="${placesFilename(run)}"`)
-    .send(exportPlaces(run.places));
+    .send(exportPlaces(maps.keptPlaces(run)));
 });
 
 // Maps library, organised by execution like the ad library.

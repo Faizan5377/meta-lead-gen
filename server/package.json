@@ -12,7 +12,8 @@
     "test": "node --experimental-sqlite --test test/*.test.js",
     "relevance:check": "node --experimental-sqlite scripts/relevance-check.js",
     "probe:feed": "node --experimental-sqlite scripts/probe-feed.js",
-    "supabase:setup": "node --experimental-sqlite scripts/supabase-setup.js"
+    "supabase:setup": "node --experimental-sqlite scripts/supabase-setup.js",
+    "hunter:account": "node --experimental-sqlite scripts/hunter-account.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

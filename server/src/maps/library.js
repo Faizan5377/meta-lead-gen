@@ -16,6 +16,13 @@ function toRow(p, runId) {
   return {
     feature_id: String(p.feature_id),
     place_id: p.place_id || null,
+    first_name: p.first_name ?? null,
+    last_name: p.last_name ?? null,
+    designation: p.designation ?? null,
+    position: p.position ?? null,
+    owner_email: p.owner_email ?? null,
+    email_confidence: p.email_confidence ?? null,
+    owner_phone: p.owner_phone ?? null,
     knowledge_id: p.knowledge_id || null,
     name: p.name || null,
     address: p.address || null,

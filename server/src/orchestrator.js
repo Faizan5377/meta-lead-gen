@@ -19,6 +19,8 @@ import { createRelevanceGate } from './relevance.js';
 import { store } from './store.js';
 import { harvest, newPage } from './scraper/engine.js';
 import { startVerification } from './verify/phase.js';
+import { enrichLeads } from './enrich/phase.js';
+import { fromMetaBusiness } from './leadSchema.js';
 import { learnNiche } from './verify/niche.js';
 import { scrapeAdvertiserDetails } from './scraper/advertiserScraper.js';
 
@@ -36,7 +38,8 @@ export async function runPipeline(runId) {
   try {
     if (run.filters.verifyOnMaps && !run.cancelRequested) await nichePhase(run);
     await harvestPhase(run);
-    if (!run.cancelRequested && run.filters.enrichAdvertisers !== false) await enrichPhase(run);
+    if (!run.cancelRequested && run.filters.enrichAdvertisers === true) await enrichPhase(run);
+    if (!run.cancelRequested) await hunterPhase(run);
     await savePhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
@@ -72,7 +75,8 @@ async function harvestPhase(run) {
 
   await harvest({
     filters: run.filters,
-    shouldStop: () => run.cancelRequested || run.counts.kept >= run.target,
+    // The target is the raw harvest size; Maps and Hunter shrink it afterwards.
+    shouldStop: () => run.cancelRequested || run.counts.harvested >= run.target,
     onAd: (rec) => {
       const res = store.considerAd(run, rec, relevance);
 
@@ -166,6 +170,75 @@ async function nichePhase(run) {
   });
   v.niche = categories;
   emit(run.id, { type: 'phase_done', phase: 'learning', categories });
+}
+
+// ── Phase 3: the decision maker ──────────────────────────────────────────────
+// One contactable person per business, or the lead is dropped. This is the last
+// gate, and the expensive one: Hunter bills a credit per domain that returns
+// people, so the budget is capped per run and reported honestly.
+async function hunterPhase(run) {
+  if (run.filters.enrichWithHunter === false) return;
+  if (!config.hunter.apiKey) {
+    const msg = 'No Hunter API key set (HUNTER_API_KEY) — leads have no contact details.';
+    run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
+    emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
+    return;
+  }
+
+  run.phase = 'contacts';
+  run.contactDrops = new Map();
+  const targets = store.keptBusinesses(run);
+  emit(run.id, { type: 'phase_started', phase: 'contacts', total: targets.length });
+
+  // The lead view knows where the website lives — Maps listing first, ad
+  // destination second — so Hunter is never handed an fb.me link.
+  for (const b of targets) {
+    const lead = fromMetaBusiness(b);
+    b.website = lead.website;
+    b.business_name = lead.business_name;
+  }
+
+  const res = await enrichLeads(targets, {
+    maxCredits: run.filters.hunterMaxCredits ?? config.hunter.defaultMaxCredits,
+    shouldStop: () => run.cancelRequested,
+    onLead: (lead) => {
+      run.counts.enrichedContacts++;
+      emit(run.id, { type: 'contact_found', business: lead, counts: run.counts });
+    },
+    onDrop: (lead, reason) => {
+      run.counts.skippedNoContact++;
+      // Grouped on the wording so the tally points at the cause, not at every
+      // distinct error string.
+      const key = String(reason).replace(/:.*$/, '');
+      run.contactDrops.set(key, (run.contactDrops.get(key) || 0) + 1);
+      emit(run.id, {
+        type: 'contact_missing', page_name: lead.business_name, reason, counts: run.counts,
+      });
+    },
+    onProgress: ({ done, total, creditsUsed }) => {
+      run.counts.creditsUsed = creditsUsed;
+      emit(run.id, { type: 'contact_progress', done, total, creditsUsed, counts: run.counts });
+    },
+    onError: (info) => {
+      run.errors.push({ scope: 'hunter', message: info.message, ts: now() });
+      emit(run.id, { type: 'error', scope: 'hunter', message: info.message, recoverable: !info.fatal });
+    },
+  });
+
+  run.counts.creditsUsed = res.creditsUsed;
+  run.enrichmentDone = true;
+  store.recount(run);
+
+  if (res.stoppedEarly && res.dropped.length) {
+    const msg = res.fatal
+      || `Hunter credit limit reached after ${res.creditsUsed} searches — later leads were not checked.`;
+    run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
+    emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
+  }
+  emit(run.id, {
+    type: 'phase_done', phase: 'contacts',
+    kept: run.counts.kept, credits: res.creditsUsed,
+  });
 }
 
 // ── Phase 2: advertiser details ──────────────────────────────────────────────

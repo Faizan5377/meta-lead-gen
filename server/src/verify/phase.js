@@ -24,6 +24,7 @@ function attach(business, place, match, rules) {
   business.maps_hours = formatHours(place.hours);
   business.maps_open_24h = place.hours ? is24(place.hours, rules) : null;
   business.maps_address = place.address || null;
+  business.maps_city = place.city || null;
   business.maps_phone = place.phone || null;
   business.maps_website = place.website || null;
   business.maps_url = place.maps_url || null;

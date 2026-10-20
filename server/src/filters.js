@@ -319,9 +319,14 @@ export function normalizeFilters(body = {}) {
       platforms, languages, matchType, sort, startDateMin, startDateMax, target,
       advertiserIds: (Array.isArray(body.advertiserIds) ? body.advertiserIds : []).map(String).slice(0, 50),
       relevanceEnabled, nicheTerms, minRelevance, ctas,
-      enrichAdvertisers: body.enrichAdvertisers !== false,
-      // Google Maps verification: hours, rating, reviews and the niche check.
-      verifyOnMaps: body.verifyOnMaps === true,
+      enrichAdvertisers: body.enrichAdvertisers === true,
+      // Google Maps verification. On by default now: it supplies the website
+      // and phone the Hunter lookup needs, and the category gate that keeps
+      // suppliers and trade schools out of a contractor list.
+      verifyOnMaps: body.verifyOnMaps !== false,
+      // Hunter.io decision-maker lookup — one contactable person per business.
+      enrichWithHunter: body.enrichWithHunter !== false,
+      hunterMaxCredits: Math.max(0, Number(body.hunterMaxCredits) || 0) || undefined,
       verify: normalizeVerifyFilters(body.verify ?? body),
     },
     errors,
