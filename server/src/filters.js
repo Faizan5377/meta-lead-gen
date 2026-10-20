@@ -320,14 +320,20 @@ export function normalizeFilters(body = {}) {
       advertiserIds: (Array.isArray(body.advertiserIds) ? body.advertiserIds : []).map(String).slice(0, 50),
       relevanceEnabled, nicheTerms, minRelevance, ctas,
       enrichAdvertisers: body.enrichAdvertisers === true,
-      // Google Maps verification. On by default now: it supplies the website
-      // and phone the Hunter lookup needs, and the category gate that keeps
-      // suppliers and trade schools out of a contractor list.
-      verifyOnMaps: body.verifyOnMaps !== false,
+      // Resolving each advertiser's real business details is NOT optional and
+      // is not a user setting. It supplies the verified website Hunter needs,
+      // the phone and city, and the category gate that keeps suppliers and
+      // trade schools out of a contractor list.
+      //
+      // It used to be a toggle. A browser restored "off" from an older run and
+      // the export came back with an Amazon product listing as a plumber,
+      // carrying an Amazon employee's address as the owner. A switch that can
+      // silently disable the only evidence in the pipeline should not exist.
+      verifyOnMaps: true,
       // Hunter.io decision-maker lookup — one contactable person per business.
       enrichWithHunter: body.enrichWithHunter !== false,
       hunterMaxCredits: Math.max(0, Number(body.hunterMaxCredits) || 0) || undefined,
-      verify: normalizeVerifyFilters(body.verify ?? body),
+      verify: { ...normalizeVerifyFilters(body.verify ?? body), nicheCheck: true },
     },
     errors,
   };

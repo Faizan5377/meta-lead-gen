@@ -52,9 +52,25 @@ describe('both scrapers produce the same shape', () => {
     assert.deepEqual(Object.keys(meta).sort(), Object.keys(place).sort());
   });
 
-  it('prefers the listing website over the ad destination', () => {
-    // The ad pointed at fb.me; the Maps listing has the real company site.
+  it('takes the website only from the resolved listing', () => {
+    // The ad pointed at fb.me; the listing has the real company site.
     assert.equal(meta.website, 'https://bourqueheating.com');
+  });
+
+  it('NEVER falls back to the ad destination — this produced an Amazon owner', () => {
+    // "Hose Bib Buddy": an Amazon product ad whose Facebook page claims the
+    // category "Plumber". Falling back to its destination handed Hunter
+    // amazon.com, which returned an Amazon employee as the business owner.
+    const unresolved = fromMetaBusiness({
+      page_name: 'Hose Bib Buddy',
+      link_url: 'https://www.amazon.com/Hose-Bib-Buddy/dp/B087J3LKYD',
+      display_domain: 'amazon.com',
+      page_categories: ['Plumber'],
+    });
+    assert.equal(unresolved.website, '');
+    // And Facebook's self-declared category is not evidence either.
+    assert.equal(unresolved.category, '');
+    assert.equal(isComplete(unresolved), false);
   });
 
   it('prefers the listing name, which is the trading name', () => {
@@ -91,10 +107,9 @@ describe('both scrapers produce the same shape', () => {
     }
   });
 
-  it('falls back to the ad data when Maps found nothing', () => {
-    const bare = fromMetaBusiness({ page_name: 'Acme Air', display_domain: 'acmeair.com' });
+  it('keeps the advertiser name when the listing has none', () => {
+    const bare = fromMetaBusiness({ page_name: 'Acme Air' });
     assert.equal(bare.business_name, 'Acme Air');
-    assert.equal(bare.website, 'acmeair.com');
   });
 });
 

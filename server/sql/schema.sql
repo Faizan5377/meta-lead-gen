@@ -157,6 +157,33 @@ alter table public.ads add column if not exists page_category    text;
 alter table public.ads add column if not exists advertiser_bio   text;
 alter table public.ads add column if not exists page_created_on  text;
 
+-- Google Maps verification + Hunter.io decision maker (added later, so these
+-- run as migrations too — an existing table never sees a create-table change).
+alter table public.ads add column if not exists maps_name                text;
+alter table public.ads add column if not exists maps_category            text;
+alter table public.ads add column if not exists maps_rating              numeric;
+alter table public.ads add column if not exists maps_reviews             integer;
+alter table public.ads add column if not exists maps_hours               text;
+alter table public.ads add column if not exists maps_open_24h            boolean;
+alter table public.ads add column if not exists maps_address             text;
+alter table public.ads add column if not exists maps_city                text;
+alter table public.ads add column if not exists maps_phone               text;
+alter table public.ads add column if not exists maps_website             text;
+alter table public.ads add column if not exists maps_url                 text;
+alter table public.ads add column if not exists maps_cid_url             text;
+alter table public.ads add column if not exists maps_match               text;
+alter table public.ads add column if not exists maps_match_confidence    integer;
+alter table public.ads add column if not exists verify_status            text;
+alter table public.ads add column if not exists verify_reason            text;
+alter table public.ads add column if not exists first_name               text;
+alter table public.ads add column if not exists last_name                text;
+alter table public.ads add column if not exists designation              text;
+alter table public.ads add column if not exists "position"               text;
+alter table public.ads add column if not exists owner_email              text;
+alter table public.ads add column if not exists email_confidence         integer;
+alter table public.ads add column if not exists owner_phone              text;
+
+
 -- ── Google Maps places ──────────────────────────────────────────────────────
 -- One row per business. feature_id is Google's stable internal id and is the
 -- dedup key, so a repeat search never resurfaces a place already collected.
@@ -242,3 +269,12 @@ create index if not exists place_runs_created_idx on public.place_runs (created_
 
 alter table public.places     enable row level security;
 alter table public.place_runs enable row level security;
+
+-- Hunter.io decision maker on Maps leads — same columns as public.ads.
+alter table public.places add column if not exists first_name               text;
+alter table public.places add column if not exists last_name                text;
+alter table public.places add column if not exists designation              text;
+alter table public.places add column if not exists "position"               text;
+alter table public.places add column if not exists owner_email              text;
+alter table public.places add column if not exists email_confidence         integer;
+alter table public.places add column if not exists owner_phone              text;

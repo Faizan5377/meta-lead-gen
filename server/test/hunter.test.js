@@ -24,6 +24,36 @@ describe('cleanDomain', () => {
     }
   });
 
+  it('rejects the marketplace that produced an Amazon employee as "owner"', () => {
+    // A live run returned chandrakantpatil@amazon.com for "Hose Bib Buddy",
+    // an Amazon product ad. Searching a marketplace spends a credit to be told
+    // about somebody else's staff.
+    for (const v of ['https://www.amazon.com/Hose-Bib-Buddy/dp/B087J3LKYD',
+      'amazon.com', 'amzn.to/3abc', 'ebay.com', 'etsy.com/shop/x', 'walmart.com',
+      'homedepot.com', 'alibaba.com']) {
+      assert.equal(cleanDomain(v), '', v);
+    }
+  });
+
+  it('rejects directories and aggregators, which are never the business', () => {
+    for (const v of ['angi.com', 'thumbtack.com', 'yelp.com/biz/x', 'houzz.com',
+      'homeadvisor.com', 'bbb.org', 'yellowpages.com']) {
+      assert.equal(cleanDomain(v), '', v);
+    }
+  });
+
+  it('rejects site builders and form hosts', () => {
+    for (const v of ['acme.myshopify.com', 'something.wixsite.com', 'typeform.com',
+      'book.housecallpro.com', 'calendly.com/x']) {
+      assert.equal(cleanDomain(v), '', v);
+    }
+  });
+
+  it('still accepts an ordinary company site', () => {
+    assert.equal(cleanDomain('https://bourqueheating.com/contact'), 'bourqueheating.com');
+    assert.equal(cleanDomain('service.acme-hvac.co.uk'), 'service.acme-hvac.co.uk');
+  });
+
   it('rejects junk rather than guessing', () => {
     for (const v of ['[link removed]', '', null, undefined, 'nan', 'not-a-domain', 'NULL']) {
       assert.equal(cleanDomain(v), '', String(v));

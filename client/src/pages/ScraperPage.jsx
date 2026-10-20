@@ -13,17 +13,9 @@ const DEFAULT_FILTERS = {
   keywords: [], matchType: 'keyword_unordered', countries: ['US'], adType: 'all',
   activeStatus: 'active', mediaType: 'all', platforms: [], languages: [],
   startDateMin: '', startDateMax: '', sort: 'impressions', target: 100,
-  relevanceEnabled: true, nicheTerms: [], enrichAdvertisers: true,
+  relevanceEnabled: true, nicheTerms: [], enrichAdvertisers: false,
   ctas: [],
   enrichWithHunter: true, hunterMaxCredits: undefined,
-  // Google Maps verification. Off by default — it costs a Maps visit per
-  // advertiser, so it has to be a deliberate choice.
-  verifyOnMaps: true,
-  verify: {
-    require24h: false,
-    hoursDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-    niche: '', minRating: 0, minReviews: 0,
-  },
 };
 
 const LAST_RUN_KEY = 'adharvester:lastRunId';
@@ -48,7 +40,10 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
       try {
         const snap = await api.getRun(lastId);
         dispatch({ type: '__snapshot__', snapshot: snap });
-        if (snap.filters?.keywords?.length) setFilters((f) => ({ ...f, ...snap.filters }));
+        if (snap.filters?.keywords?.length) {
+          const { keywords, countries, target, ctas, hunterMaxCredits } = snap.filters;
+          setFilters((f) => ({ ...f, keywords, countries, target, ctas, hunterMaxCredits }));
+        }
         if (snap.status === 'running') {
           unsubRef.current?.();
           unsubRef.current = subscribeToRun(lastId, dispatch);

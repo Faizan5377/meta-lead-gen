@@ -55,17 +55,28 @@ function cityFrom(address, fallback) {
   return parts.length >= 2 ? parts[parts.length - 2] : '';
 }
 
-// An Ad Library advertiser, after Maps verification, as a lead.
+// An Ad Library advertiser, after its details were resolved, as a lead.
 //
-// The website comes from the Maps listing first: the ad's own destination is a
-// tracking link or an fb.me redirect about 40% of the time, while the listing
-// carries the real company site.
+// `website` and `category` come ONLY from the resolved business listing, never
+// from the ad. This is not fussiness — it is the bug that produced
+// "chandrakantpatil@amazon.com":
+//
+//   an ad for a Hose Bib Buddy (an Amazon product) whose Facebook page
+//   self-declares the category "Plumber" → the ad's destination was an Amazon
+//   product URL → falling back to it handed Hunter `amazon.com` → Hunter
+//   returned an Amazon employee as the business owner.
+//
+// The ad's destination is a tracking link, a marketplace page or an fb.me
+// redirect about 40% of the time, and the page category is written by the
+// advertiser. Neither is evidence about the business, so neither is used. A
+// lead with no resolved website has no verified way to be contacted and is
+// dropped at the Hunter step.
 export function fromMetaBusiness(b = {}) {
   return {
     business_name: s(b.maps_name) || s(b.page_name),
-    website: s(b.maps_website) || s(b.link_url) || s(b.display_domain),
+    website: s(b.maps_website),
     business_phone: s(b.maps_phone),
-    category: s(b.maps_category) || s((b.page_categories || [])[0]),
+    category: s(b.maps_category),
     city: cityFrom(b.maps_address, b.maps_city),
     source: 'Meta Ads',
     ...emptyContact(),

@@ -27,11 +27,32 @@ export class HunterError extends Error {
 // Returns '' for anything that is not a plausible company domain, which is the
 // important half: the Ad Library is full of fb.me and api.whatsapp.com links,
 // and searching those burns a credit to be told about Meta's staff.
-const SOCIAL = new Set([
+// Domains that are never the advertiser's own company.
+//
+// Searching one of these spends a credit to be told about somebody else's
+// staff. That is not hypothetical: an ad for an Amazon product resolved to
+// `amazon.com` and Hunter dutifully returned an Amazon employee, presented as
+// the business owner.
+const NOT_A_COMPANY_SITE = new Set([
+  // Social and messaging
   'facebook.com', 'fb.me', 'fb.com', 'm.me', 'instagram.com', 'linkedin.com',
   'api.whatsapp.com', 'wa.me', 'whatsapp.com', 'youtube.com', 'tiktok.com',
-  'x.com', 'twitter.com', 'linktr.ee', 'bit.ly', 'goo.gl', 'google.com',
-  'sites.google.com', 'business.site', 'wixsite.com', 'typeform.com',
+  'x.com', 'twitter.com', 'pinterest.com', 'nextdoor.com',
+  // Marketplaces and retailers — the ad links to a product, not a business
+  'amazon.com', 'amzn.to', 'ebay.com', 'etsy.com', 'walmart.com', 'target.com',
+  'aliexpress.com', 'alibaba.com', 'temu.com', 'shein.com', 'wish.com',
+  'homedepot.com', 'lowes.com', 'wayfair.com', 'overstock.com', 'costco.com',
+  // Lead aggregators and directories — the whole point is that they are not the business
+  'angi.com', 'angieslist.com', 'thumbtack.com', 'yelp.com', 'houzz.com',
+  'homeadvisor.com', 'porch.com', 'bark.com', 'checkatrade.com', 'trustpilot.com',
+  'bbb.org', 'yellowpages.com', 'manta.com', 'nextdoorads.com',
+  // Shorteners, builders and form hosts
+  'linktr.ee', 'bit.ly', 'goo.gl', 'tinyurl.com', 'rb.gy',
+  'google.com', 'sites.google.com', 'business.site', 'wixsite.com',
+  'myshopify.com', 'squarespace.com', 'weebly.com', 'godaddysites.com',
+  'wordpress.com', 'blogspot.com',
+  'typeform.com', 'jotform.com', 'calendly.com', 'fillout.com',
+  'housecallpro.com', 'book.housecallpro.com',
 ]);
 
 export function cleanDomain(value) {
@@ -47,11 +68,10 @@ export function cleanDomain(value) {
   }
   if (host.startsWith('www.')) host = host.slice(4);
   if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) return '';
-  // A social or shortener link is not a company domain, and Hunter would
-  // happily charge a credit to tell us about Facebook.
-  if (SOCIAL.has(host)) return '';
+  if (NOT_A_COMPANY_SITE.has(host)) return '';
+  // Catch subdomains too: `www.amazon.com`, `shop.myshopify.com`.
   const base = host.split('.').slice(-2).join('.');
-  return SOCIAL.has(base) ? '' : host;
+  return NOT_A_COMPANY_SITE.has(base) ? '' : host;
 }
 
 export async function account(apiKey = config.hunter.apiKey) {

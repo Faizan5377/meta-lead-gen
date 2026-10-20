@@ -230,10 +230,10 @@ export function reducer(state, ev) {
 
 function phaseLabel(p) {
   return {
-    learning: 'Learning what Google calls this trade',
+    learning: 'Learning the niche',
     harvesting: 'Harvesting ads',
     contacts: 'Finding decision makers',
-    verifying: 'Verifying on Google Maps',
+    verifying: 'Resolving business details',
     enriching: 'Fetching advertiser details',
     saving: 'Saving to library',
     done: 'Done',
