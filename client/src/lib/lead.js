@@ -25,9 +25,13 @@ const contact = (r) => ({
 
 export const metaLead = (b = {}) => ({
   business_name: s(b.maps_name) || s(b.page_name),
-  website: s(b.maps_website) || s(b.link_url) || s(b.display_domain),
+  // Resolved listing only — never the ad's destination or Facebook's
+  // self-declared category. Mirrors server/src/leadSchema.js; letting these
+  // drift means the table shows a website the CSV does not have, which is how
+  // an Amazon product URL looked like a plumber's site.
+  website: s(b.maps_website),
   business_phone: s(b.maps_phone),
-  category: s(b.maps_category) || s((b.page_categories || [])[0]),
+  category: s(b.maps_category),
   city: cityFrom(b.maps_address, b.maps_city),
   source: 'Meta Ads',
   ...contact(b),
