@@ -198,7 +198,13 @@ async function hunterPhase(run) {
     b.business_name = lead.business_name;
   }
 
+  // Seeded with the companies and people earlier runs already produced, so a
+  // business advertising under a new page cannot arrive as a second lead for
+  // the same person.
+  const known = await library.knownContacts().catch(() => null);
+
   const res = await enrichLeads(targets, {
+    known,
     maxCredits: run.filters.hunterMaxCredits ?? config.hunter.defaultMaxCredits,
     shouldStop: () => run.cancelRequested,
     onLead: (lead) => {

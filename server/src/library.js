@@ -176,6 +176,45 @@ class Library {
   // ── writes ────────────────────────────────────────────────────────────────
   // Saving happens once, at the end of a run: one batched round-trip instead of
   // thousands, and a run that gets stopped early still saves what it collected.
+  // Companies and people already collected in EARLIER runs.
+  //
+  // Business-level dedup is by Facebook page, so a company that advertises
+  // under a new page would otherwise be enriched again and arrive as a second
+  // lead for the same person. Seeding the run with what we already hold keeps
+  // "no duplicates" true across runs, not just within one.
+  async knownContacts() {
+    const emails = new Set();
+    const domains = new Set();
+    const add = (rows) => {
+      for (const r of rows || []) {
+        if (r.owner_email) emails.add(String(r.owner_email).toLowerCase());
+        const host = String(r.maps_website || '')
+          .replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0].toLowerCase();
+        if (host.includes('.')) domains.add(host);
+      }
+    };
+
+    if (this.sb) {
+      try {
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await this.sb
+            .from('ads').select('owner_email,maps_website')
+            .not('owner_email', 'is', null)
+            .range(from, from + PAGE - 1);
+          if (error) break;
+          add(data);
+          if (!data || data.length < PAGE) break;
+        }
+      } catch { /* fall through to the local mirror */ }
+    }
+    try {
+      add(db.allBusinesses().filter((r) => r.owner_email));
+    } catch { /* the local mirror is optional */ }
+
+    return { emails, domains };
+  }
+
   async save(businesses, runId) {
     for (const b of businesses) db.upsertBusiness({ ...b, run_id: runId });
     if (!this.sb || !businesses.length) {

@@ -260,7 +260,10 @@ async function hunterPhase(run) {
     p.business_name = lead.business_name;
   }
 
+  const known = await placesLibrary.knownContacts?.().catch(() => null);
+
   const res = await enrichLeads(run.places, {
+    known,
     maxCredits: run.filters.hunterMaxCredits ?? config.hunter.defaultMaxCredits,
     shouldStop: () => run.cancelRequested,
     onLead: (lead) => {

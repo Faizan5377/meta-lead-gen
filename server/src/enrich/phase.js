@@ -18,6 +18,8 @@ import { pickDecisionMaker } from './hierarchy.js';
 import { CreditBudget, HunterError, cleanDomain, decisionMakers } from './hunter.js';
 
 export const DROP = {
+  DUPLICATE_DOMAIN: 'same company as a lead already in this list',
+  DUPLICATE_EMAIL: 'same decision maker as a lead already in this list',
   NO_WEBSITE: 'no usable website',
   NO_PEOPLE: 'Hunter found nobody at this domain',
   NO_DECISION_MAKER: 'nobody senior enough (no owner, CEO, president or VP)',
@@ -45,6 +47,8 @@ export async function enrichLeads(leads, {
   apiKey = config.hunter.apiKey,
   maxCredits = config.hunter.defaultMaxCredits,
   concurrency = config.hunter.concurrency,
+  known,       // { emails, domains } already collected in earlier runs
+  lookup = decisionMakers,   // injectable so the dedup rules can be tested without Hunter
   shouldStop,
   onLead,      // (lead)            — enriched and kept
   onDrop,      // (lead, reason)    — removed from the run
@@ -56,6 +60,15 @@ export async function enrichLeads(leads, {
   const dropped = [];
   let done = 0;
   let fatal = null;
+
+  // Franchise networks put one company behind many Facebook pages — a live
+  // export had ~20 "Service Experts" locations and a dozen "Aire Serv of …",
+  // every one a separate advertiser pointing at a single domain. Each passes
+  // business-level dedup, then Hunter returns the SAME person for all of them.
+  // Claiming the domain before the search both removes those duplicates and
+  // stops paying a credit per copy.
+  const claimedDomains = new Set(known?.domains || []);
+  const claimedEmails = new Set(known?.emails || []);
 
   const drop = (lead, reason) => {
     dropped.push({ lead, reason });
@@ -74,6 +87,15 @@ export async function enrichLeads(leads, {
       return;
     }
 
+    // One lead per company. Checked before the credit is reserved, so a
+    // twenty-location franchise costs one search rather than twenty.
+    if (claimedDomains.has(domain)) {
+      drop(lead, DROP.DUPLICATE_DOMAIN);
+      done++;
+      return;
+    }
+    claimedDomains.add(domain);
+
     if (!budget.reserve()) {
       drop(lead, DROP.OUT_OF_CREDITS);
       done++;
@@ -82,7 +104,7 @@ export async function enrichLeads(leads, {
 
     let charged = false;
     try {
-      const res = await decisionMakers(domain, { apiKey });
+      const res = await lookup(domain, { apiKey });
       charged = res.charged;
 
       if (!res.people.length) {
@@ -91,7 +113,11 @@ export async function enrichLeads(leads, {
         const person = pickDecisionMaker(res.people, lead.business_name);
         if (!person) {
           drop(lead, DROP.NO_DECISION_MAKER);
+        } else if (claimedEmails.has(String(person.email).toLowerCase())) {
+          // Different domains can still reach one person (acquired brands).
+          drop(lead, DROP.DUPLICATE_EMAIL);
         } else {
+          claimedEmails.add(String(person.email).toLowerCase());
           // Patched in place: these objects are the live run's records, and
           // the export, the save and the UI all hold the same references.
           Object.assign(lead, withDecisionMaker({}, person));
