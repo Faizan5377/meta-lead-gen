@@ -3,6 +3,7 @@
 // SQLite is handled by the orchestrator via db.js.
 
 import { randomUUID } from 'node:crypto';
+import { config } from './config.js';
 import { ctaMatches } from './filters.js';
 import { library } from './library.js';
 
@@ -19,15 +20,24 @@ class RunStore {
       status: 'idle',            // idle | running | finished | stopped | error
       phase: 'idle',             // idle | harvesting | enriching | saving | done
       filters,
+      // What the user asked for: that many FINISHED leads — verified on Maps
+      // and carrying a decision maker — however many ads that takes.
       target: filters.target,
+      // …and the rail on "however many". Harvesting is cheap, but every
+      // candidate costs a Maps visit and may cost a Hunter credit, so a niche
+      // that converts badly ends rather than running all night.
+      candidateCeiling: Math.min(
+        config.maxCandidates,
+        Math.max(500, filters.target * config.candidatesPerLead),
+      ),
       businesses: [],            // kept businesses (this run), insertion order
       businessByPage: new Map(), // dedup key -> business
       rejectedKeys: new Set(),   // verification said no — don't pay to check twice
       contactDrops: new Map(),   // why Hunter rejected leads, for the run summary
       counts: {
         rawSeen: 0,            // unique ads pulled off the feed
-        harvested: 0,          // advertisers pulled off the feed — THIS is the target
-        kept: 0,               // contactable leads left after verification + Hunter
+        harvested: 0,          // advertisers admitted as candidates — a diagnostic
+        kept: 0,               // finished leads: verified AND contactable — THIS is the target
         skippedKnown: 0,       // already in the shared library
         skippedIrrelevant: 0,  // failed the niche relevance gate
         skippedCta: 0,         // the ad's button was not one you asked for
@@ -50,14 +60,17 @@ class RunStore {
 
   get(id) { return this.runs.get(id); }
 
-  // With Maps verification on, `businesses` holds CANDIDATES — a lead is only
-  // real once Google has confirmed it — so the target, the save and the export
-  // all have to ask for the confirmed ones rather than the whole array.
+  // `businesses` holds CANDIDATES at every stage — Google has yet to confirm
+  // some, Hunter has yet to find a person at others — so the target, the save
+  // and the export all have to ask for the finished ones rather than the whole
+  // array. This is also the number the harvest's stop condition reads, which is
+  // what makes "150 leads" mean 150 leads rather than 150 attempts.
   keptBusinesses(run) {
     let list = run.businesses;
     if (run.filters?.verifyOnMaps) list = list.filter((b) => b.verify_status === 'kept');
-    // Once Hunter has run, a lead with nobody to email is not a lead.
-    if (run.enrichmentDone) list = list.filter((b) => !!b.owner_email);
+    // A lead with nobody to email is not a lead. Applied from the moment
+    // contact lookup starts, not after it finishes: the two run together now.
+    if (run.contactsRequired) list = list.filter((b) => !!b.owner_email);
     return list;
   }
 
@@ -66,13 +79,26 @@ class RunStore {
     return run.counts.kept;
   }
 
-  // The run is over. Any candidate still waiting on Google was never going to
-  // be checked — the target filled first — and must not be mistaken for a lead.
-  purgeUnverified(run) {
-    if (!run.filters?.verifyOnMaps) return 0;
-    const left = run.businesses.filter((b) => b.verify_status !== 'kept');
-    for (const b of left) this.dropCandidate(run, b, 'not checked — target already met');
+  // The run is over. Any candidate still waiting on Google, or still waiting on
+  // a decision maker, was never going to be finished — the target filled first —
+  // and must not be mistaken for a lead.
+  purgeIncomplete(run) {
+    const left = run.businesses.filter((b) => !this.isFinished(run, b));
+    // Attributed to the gate it actually died at: one that Google confirmed and
+    // Hunter never reached is a contact shortfall, not a verification failure,
+    // and filing it under the wrong tally sends you tuning the wrong filter.
+    for (const b of left) {
+      const reason = 'not checked — target already met';
+      if (b.verify_status === 'kept') this.dropContact(run, b, reason);
+      else this.dropCandidate(run, b, reason);
+    }
     return left.length;
+  }
+
+  isFinished(run, b) {
+    if (run.filters?.verifyOnMaps && b.verify_status !== 'kept') return false;
+    if (run.contactsRequired && !b.owner_email) return false;
+    return true;
   }
 
   // Verification said no. The candidate leaves the array entirely so the
@@ -85,6 +111,25 @@ class RunStore {
     run.businessByPage.delete(business.business_key);
     run.rejectedKeys.add(business.business_key);
     run.counts.skippedUnverified++;
+    this.recount(run);
+  }
+
+  // Hunter found no one worth emailing. Same disposal as a failed verification —
+  // out of the array, remembered as rejected — but tallied separately, because
+  // "no decision maker" and "not the right business" are different problems and
+  // the run summary has to be able to tell you which one cost you the list.
+  dropContact(run, business, reason) {
+    business.contact_status = 'dropped';
+    business.contact_reason = reason || null;
+    const i = run.businesses.indexOf(business);
+    if (i >= 0) run.businesses.splice(i, 1);
+    run.businessByPage.delete(business.business_key);
+    run.rejectedKeys.add(business.business_key);
+    run.counts.skippedNoContact++;
+    // Grouped on the wording so the tally points at the cause, not at every
+    // distinct error string.
+    const key = String(reason).replace(/:.*$/, '');
+    run.contactDrops.set(key, (run.contactDrops.get(key) || 0) + 1);
     this.recount(run);
   }
 
@@ -145,21 +190,23 @@ class RunStore {
       return grew ? { status: 'updated', business: existing } : { status: 'skipped' };
     }
 
-    // Hard ceiling. The engine also stops mid-buffer at the target, but this is
-    // the invariant that guarantees it: a run NEVER returns more businesses than
-    // were asked for. Fewer only if the Ad Library genuinely runs out.
-    // Note this guards new businesses only — updates to ones already kept (an
-    // extra keyword, a longer-running ad) must still be applied above.
-    // The target is how many advertisers to COLLECT, not how many survive.
-    // Counted cumulatively: a candidate dropped later by Maps or Hunter must
-    // not reopen a slot, or the run would quietly chase a moving total.
-    if (run.counts.harvested >= run.target) return { status: 'skipped', atTarget: true };
+    // The ceiling here is on CANDIDATES, not on leads: the target is how many
+    // finished leads to deliver, and the harvest stops when `counts.kept`
+    // reaches it. This rail only stops a run that keeps harvesting without ever
+    // converting. Counted cumulatively — a candidate dropped later by Maps or
+    // Hunter has still cost its lookup and must not reopen a slot.
+    // Note this guards new businesses only; updates to ones already kept (an
+    // extra keyword, a longer-running ad) are applied above.
+    if (run.counts.harvested >= (run.candidateCeiling ?? run.target)) {
+      return { status: 'skipped', atCeiling: true };
+    }
 
     const business = {
       ...rec,
       business_key: key,
       keywords: rec.keyword ? [rec.keyword] : [],
       ...(run.filters?.verifyOnMaps ? { verify_status: 'pending' } : {}),
+      ...(run.contactsRequired ? { contact_status: 'pending' } : {}),
     };
     run.businesses.push(business);
     run.businessByPage.set(key, business);

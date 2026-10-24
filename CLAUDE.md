@@ -11,7 +11,7 @@ Two lead scrapers behind one UI:
 
 Both save each search as an "execution" in a shared Supabase library, so repeat searches only return new leads. See [README.md](README.md) for the product description.
 
-**Scope note:** owner lookup, Hunter.io and contact scraping were removed. Don't reintroduce third-party enrichment.
+**Scope note:** both scrapers end in the same Hunter.io decision-maker lookup and export the same 13 columns. A lead with nobody to email is dropped, not exported blank.
 
 ## Commands
 
@@ -81,13 +81,26 @@ Google already draws the line: contractors are filed as `HVAC contractor`, the o
    So a 24-hour check must reach the place panel — `lookupPlace` clicks the top card when Maps stops on the rail. `findPlaceRecord` matches on **shape** (feature id at `[10]`, name at `[11]`) because the record's root moves between payloads.
 3. **`verify/gate.js`** is pure and unit-tested: the hours rule, the advertiser↔listing join, the niche test. A wrong join attaches someone else's rating to your lead, so a match must be **evidenced** — shared domain (95), exact name after stripping legal noise (85), or ≥0.8 token overlap (70) — and the evidence is stored on the lead as `maps_match`.
 
-### The target is the RAW harvest, not the finished list
+### The target is the FINISHED list, not the raw harvest
 
-This reversed. It used to mean "200 finished leads, dig as deep as needed"; it now means "collect 200 advertisers, then filter them down". Asking for 10,000 is expected to yield 1,000–2,000 contactable leads.
+**Ad Library:** 150 means 150 leads that are verified on Maps *and* carry a decision maker — however many ads that takes. The measured funnel is ~9 harvested advertisers per finished lead, so a target of 150 scans a few thousand ads.
 
-- `counts.harvested` is the target, incremented **cumulatively** on admission and never decremented. A candidate dropped later by Maps or Hunter must not reopen a slot, or the run chases a moving total.
-- `counts.kept` is what survived everything, and is what the UI and the save use.
+This is why verification and the Hunter lookup run **concurrently with the harvest** rather than after it (`startVerification` + `startEnrichment`, both kicked off in `harvestPhase`). A gate that can reject has to be able to tell the harvest to keep digging; run afterwards, it could only ever shrink the list below what was asked for. The sequence at the end is strict — harvest drains into verification, verification drains into contacts — because each stage feeds the next:
+
+```
+harvest() ends → verifier.harvestFinished() → await verifier.promise
+               → contacts.harvestFinished() → await contacts.promise
+               → noteFinished() → reportShortfall()
+```
+
+- `counts.kept` **is** the target: `store.keptBusinesses(run)` filtered to verified + contactable. The harvest's `shouldStop` reads it, which is the whole mechanism.
+- `counts.harvested` is now a diagnostic — candidates admitted, cumulative, never decremented. Its ceiling is `run.candidateCeiling` (`target × config.candidatesPerLead`, floor 500, capped by `maxCandidates`), the rail that ends a niche which will not convert.
+- Four things can stop the harvest: the target, that ceiling, the Hunter credit cap, and `verify.maxChecks`. **Whichever one fires, `reportShortfall` names it** — "finished with 94 of 150" is indistinguishable from a bug unless the run says which wall it hit.
+- `library.note()` happens only in `noteFinished()`, after every gate. Noting a candidate earlier would hide it from all future runs even when Google or Hunter rejects it.
 - `store.keptBusinesses(run)` / `maps.keptPlaces(run)` are the only honest views of a run. Never read `run.businesses` or `run.places` directly — they hold candidates, and the CSV is exactly where an unenriched one must not appear.
+- The client mirrors this: rows arrive `_pending` and the table shows only finished ones, so what is on screen is what an export would contain. The server decides (`pending:` on `business_added` / `business_verified` / `contact_found`), never the client.
+
+**Google Maps:** unchanged — its target still counts places collected, and it still uses the batch `enrichLeads()` as a closing phase.
 
 ### One lead shape, both scrapers
 
@@ -107,7 +120,9 @@ This reversed. It used to mean "200 finished leads, dig as deep as needed"; it n
 
 Credits are the binding constraint, not runtime: a Starter plan is 2,000 searches a month, and 10,000 leads at a ~60% hit rate needs ~6,000. `npm run hunter:account` prints the balance. Every run takes a `hunterMaxCredits` cap and reports honestly when it hits it.
 
-**Apollo goes here.** `enrich/phase.js` is provider-shaped on purpose: phone lookup and email re-verification become extra steps over the same leads, filling `owner_phone`, without the pipeline changing shape.
+`enrich/phase.js` exposes the same rules two ways: `createEnricher()` holds the dedup + hierarchy + budget logic, `enrichLeads()` wraps it for a finite list (Maps), and `startEnrichment()` wraps it in workers that consume leads while the Ad Library harvest is still running.
+
+**Apollo goes here.** That split is provider-shaped on purpose: phone lookup and email re-verification become extra steps over the same leads, filling `owner_phone`, without the pipeline changing shape.
 
 ### Filtering on the ad's button (CTA)
 
@@ -117,10 +132,11 @@ The `group` field earns its keep: the button says what the ad is **for**. In a l
 
 ### The harvest ceiling is still hard
 
-The target changed meaning (above), but it is still a ceiling the harvest cannot exceed — asking for 3 once returned 15. Two independent guards:
+Asking for 3 once returned 15. Three independent guards now:
 
 1. `drain()` in engine.js re-checks `shouldStop` **after every record**, stopping mid-buffer. Meta's feed arrives a page at a time.
-2. `store.considerAd` refuses new businesses past `counts.harvested >= target`.
+2. `store.considerAd` refuses new **candidates** past `counts.harvested >= run.candidateCeiling`.
+3. The last slots are the expensive ones, so `startEnrichment` holds a worker back when the leads already in flight could fill the target (`inFlight >= capacity()`). Without it, five concurrent workers overshoot by four paid credits whose leads then have to be thrown away. A worker that stands down is not lost — the in-flight ones re-enter the loop when they finish, so the tail never stalls.
 
 Guard 2 deliberately allows **updates** to businesses already kept (extra keyword, longer-running ad). `MAX_TARGET` (2500) is enforced in `normalizeFilters`.
 

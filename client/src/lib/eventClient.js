@@ -89,10 +89,13 @@ export function reducer(state, ev) {
         ticker: `Harvesting${ev.keyword ? ` “${ev.keyword}”` : ''}${ev.country ? ` · ${ev.country}` : ''} — ${ev.kept}/${ev.target} kept`,
       };
 
+    // A candidate, not a lead. `_pending` is the server's own verdict — it has
+    // yet to clear Google and Hunter — and the table hides pending rows, so the
+    // list on screen is always the list you would export.
     case 'business_added': {
       const key = ev.business.business_key ?? ev.business.library_id;
       if (state.index[key] != null) return { ...state, counts: ev.counts || state.counts };
-      const businesses = state.businesses.concat(ev.business);
+      const businesses = state.businesses.concat({ ...ev.business, _pending: ev.pending !== false });
       return {
         ...state,
         businesses,
@@ -126,7 +129,7 @@ export function reducer(state, ev) {
       const key = ev.business.business_key ?? ev.business.library_id;
       const i = state.index[key];
       const businesses = state.businesses.slice();
-      if (i != null) businesses[i] = { ...businesses[i], ...ev.business };
+      if (i != null) businesses[i] = { ...businesses[i], ...ev.business, _pending: ev.pending !== false };
       return {
         ...state, businesses,
         counts: ev.counts || state.counts,
@@ -149,14 +152,18 @@ export function reducer(state, ev) {
       };
     }
 
-    // Hunter found the decision maker: patch the contact onto the business.
+    // Hunter found the decision maker — the lead is finished, so it stops being
+    // pending and appears in the table. It is appended if the row is somehow
+    // missing, because this event is the one that means "this is a lead".
     case 'contact_found': {
       const key = ev.business.business_key ?? ev.business.library_id;
       const i = state.index[key];
       const businesses = state.businesses.slice();
-      if (i != null) businesses[i] = { ...businesses[i], ...ev.business };
+      if (i != null) businesses[i] = { ...businesses[i], ...ev.business, _pending: false };
+      else businesses.push({ ...ev.business, _pending: false });
       return {
         ...state, businesses,
+        index: i != null ? state.index : { ...state.index, [key]: businesses.length - 1 },
         counts: ev.counts || state.counts,
         ticker: `Found ${ev.business.first_name || ''} ${ev.business.last_name || ''}`.trim()
           + ` at "${ev.business.business_name || '—'}"`,
@@ -180,8 +187,12 @@ export function reducer(state, ev) {
       return {
         ...state,
         counts: ev.counts || state.counts,
-        phaseInfo: { ...state.phaseInfo, contacts: { done: ev.done, total: ev.total, credits: ev.creditsUsed } },
-        ticker: `Finding decision makers — ${ev.done}/${ev.total} (${ev.creditsUsed} credits)`,
+        phaseInfo: {
+          ...state.phaseInfo,
+          contacts: { done: ev.kept ?? ev.done, total: ev.target ?? ev.total, credits: ev.creditsUsed },
+        },
+        ticker: `Finding decision makers — ${ev.kept ?? ev.done}/${ev.target ?? '?'} leads`
+          + ` (${ev.done} checked, ${ev.creditsUsed} credits)`,
       };
 
     case 'business_enriched': {

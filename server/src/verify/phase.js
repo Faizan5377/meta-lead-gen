@@ -1,11 +1,12 @@
 // Verify harvested advertisers against Google Maps, while the harvest runs.
 //
 // This is deliberately NOT a phase that waits for the harvest to finish. The
-// run promises "200 means 200 verified leads", and a verification that can
-// reject has to be able to tell the harvest to keep digging — so the two run
-// side by side: the harvest pushes candidates, these workers confirm or drop
-// them, and `counts.kept` (confirmed only) is what the harvest's stop condition
-// reads. A run that keeps 200 may well check 2,000.
+// run promises "200 means 200 finished leads", and a gate that can reject has
+// to be able to tell the harvest to keep digging — so they run side by side:
+// the harvest pushes candidates, these workers confirm or drop them, the
+// contact lookup takes it from there, and `counts.kept` (finished leads only)
+// is what the harvest's stop condition reads. A run that keeps 200 may well
+// check 2,000.
 
 import { config } from '../config.js';
 import { lookupPlace } from '../maps/place.js';
@@ -75,12 +76,18 @@ async function verifyOne(page, run, business, { rules, region, emit }) {
 
   // Re-check the target here, not just at admission: several workers can be
   // mid-flight when the last slot is filled, and the run must never return 201.
+  // `kept` counts leads that cleared Hunter too, so this stays open while the
+  // contact lookup still needs candidates to work through.
   if (verdict.keep && store.recount(run) < run.target) {
     attach(business, place, match, rules);
     business.verify_status = 'kept';
     business.verify_reason = null;
     store.recount(run);
-    emit({ type: 'business_verified', business, counts: run.counts });
+    emit({
+      type: 'business_verified', business, counts: run.counts,
+      // Confirmed, but still not a lead until it has someone to email.
+      pending: !store.isFinished(run, business),
+    });
     return true;
   }
 
@@ -95,7 +102,7 @@ async function verifyOne(page, run, business, { rules, region, emit }) {
 
 // Start the workers. The caller tells us when the harvest has stopped producing
 // candidates; until then an empty queue means "wait", not "finished".
-export function startVerification(run, { emit }) {
+export function startVerification(run, { emit, shouldStop }) {
   const rules = run.filters.verify;
   const region = regionOf(run.filters);
   let harvestDone = false;
@@ -109,6 +116,9 @@ export function startVerification(run, { emit }) {
     try {
       while (!stopped && !run.cancelRequested && !outOfChecks()) {
         if (store.recount(run) >= run.target) break;
+        // Nothing downstream can finish a lead any more (credits gone), so a
+        // Maps lookup here would be paid for and thrown away.
+        if (shouldStop?.()) break;
         const business = nextPending();
         if (!business) {
           if (harvestDone) break;

@@ -2,7 +2,10 @@
 //
 //   1. Harvest  — pull ads off the Ad Library feed, drop anything already in the
 //                 shared library or outside the searched niche, and stop the
-//                 moment the target is hit.
+//                 moment the target is hit. Google Maps verification and the
+//                 Hunter contact lookup run ALONGSIDE it, not after, because
+//                 the target counts finished leads: the harvest cannot know
+//                 when to stop until the last gate has had its say.
 //   2. Enrich   — optional: open each advertiser's ad-details panel for the
 //                 Instagram handle and follower count the feed doesn't carry.
 //   3. Save     — write the run to the shared library in one batch.
@@ -19,7 +22,7 @@ import { createRelevanceGate } from './relevance.js';
 import { store } from './store.js';
 import { harvest, newPage } from './scraper/engine.js';
 import { startVerification } from './verify/phase.js';
-import { enrichLeads } from './enrich/phase.js';
+import { startEnrichment } from './enrich/phase.js';
 import { fromMetaBusiness } from './leadSchema.js';
 import { learnNiche } from './verify/niche.js';
 import { scrapeAdvertiserDetails } from './scraper/advertiserScraper.js';
@@ -39,7 +42,6 @@ export async function runPipeline(runId) {
     if (run.filters.verifyOnMaps && !run.cancelRequested) await nichePhase(run);
     await harvestPhase(run);
     if (!run.cancelRequested && run.filters.enrichAdvertisers === true) await enrichPhase(run);
-    if (!run.cancelRequested) await hunterPhase(run);
     await savePhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
@@ -65,29 +67,44 @@ async function harvestPhase(run) {
     : null;
   run.relevance = relevance;
 
-  // Verification runs ALONGSIDE the harvest, not after it. Its workers consume
-  // candidates as they arrive and only confirmed leads count toward the target,
-  // which is what lets the harvest keep digging past the first N attempts.
+  // Both gates run ALONGSIDE the harvest, not after it. Their workers consume
+  // candidates as they arrive and only FINISHED leads — confirmed by Google and
+  // carrying a decision maker — count toward the target, which is what lets the
+  // harvest keep digging until the number the user asked for actually exists.
+  const contacts = await startContacts(run);
   const verifier = run.filters.verifyOnMaps
-    ? startVerification(run, { emit: (ev) => emit(run.id, ev) })
+    ? startVerification(run, {
+      emit: (ev) => emit(run.id, ev),
+      // Once the credits are gone no further candidate can ever be finished,
+      // so paying for more Maps lookups buys nothing.
+      shouldStop: () => !!contacts?.exhausted,
+    })
     : null;
   if (verifier) emit(run.id, { type: 'phase_started', phase: 'verifying', target: run.target });
 
   await harvest({
     filters: run.filters,
-    // The target is the raw harvest size; Maps and Hunter shrink it afterwards.
-    shouldStop: () => run.cancelRequested || run.counts.harvested >= run.target,
+    // `counts.kept` is the live count of finished leads, so this reads "stop
+    // when the user has what they asked for" — not "stop after N attempts".
+    // The other three are the rails: a niche that will not convert, a credit
+    // cap, and the Maps lookup ceiling all end the dig rather than extend it.
+    shouldStop: () => run.cancelRequested
+      || run.counts.kept >= run.target
+      || run.counts.harvested >= run.candidateCeiling
+      || !!contacts?.exhausted
+      || !!verifier?.ranOutOfChecks(),
     onAd: (rec) => {
       const res = store.considerAd(run, rec, relevance);
 
       if (res.status === 'added' || res.status === 'updated') {
-        // With verification on, a candidate is not a lead yet — noting it in
-        // the library here would hide it from every future run even if Google
-        // ends up rejecting it.
-        if (!run.filters.verifyOnMaps) library.note(rec.library_id, res.business.business_key);
+        // A candidate is not a lead yet — noting it in the library here would
+        // hide it from every future run even if Google or Hunter rejects it.
+        // That happens once the run is over, in noteFinished().
         emit(run.id, {
           type: res.status === 'added' ? 'business_added' : 'business_updated',
           business: res.business, counts: run.counts,
+          // Not a lead yet: the table hides it until the gates have had their say.
+          pending: !store.isFinished(run, res.business),
         });
         return;
       }
@@ -130,24 +147,59 @@ async function harvestPhase(run) {
     verifier.harvestFinished();
     if (run.cancelRequested) verifier.stop();
     await verifier.promise;
-    for (const b of store.keptBusinesses(run)) library.note(b.library_id, b.business_key);
-    if (verifier.ranOutOfChecks()) {
-      const msg = `Stopped after ${run.counts.verifiedDone} Google Maps checks `
-        + `(the safety ceiling) with ${run.counts.kept} of ${run.target} confirmed.`;
-      run.errors.push({ scope: 'verify', message: msg, kind: 'notice', ts: now() });
-      emit(run.id, { type: 'notice', scope: 'verify', message: msg });
-    }
     emit(run.id, {
       type: 'phase_done', phase: 'verifying',
       checked: run.counts.verifiedDone, kept: run.counts.kept,
     });
   }
 
+  // Verification has stopped producing, so the contact queue is now final.
+  if (contacts) await finishContacts(run, contacts);
+
+  reportShortfall(run, { verifier, contacts });
+
+  // Only now is a lead final. Noting it here is what makes the next run return
+  // NEW leads: the advertiser and the ad both become "already collected".
+  noteFinished(run);
+
   emit(run.id, {
     type: 'phase_done', phase: 'harvesting',
-    kept: run.counts.kept,
+    kept: run.counts.kept, harvested: run.counts.harvested,
     nicheProfile: relevance?.profile() || null,
   });
+}
+
+// Leads that survived everything are recorded as collected; candidates that
+// died on the way are recorded as seen, so a repeat search spends neither a
+// Maps lookup nor a credit arriving at the same answer twice.
+function noteFinished(run) {
+  for (const b of store.keptBusinesses(run)) library.note(b.library_id, b.business_key);
+}
+
+// A run that asked for 150 and delivered 94 has to say which wall it hit.
+// Without this the two possible explanations — "this niche is thin" and "the
+// scraper is broken" — look identical from the outside, and the user cannot
+// tell whether to widen the search, raise the credit cap, or report a bug.
+function reportShortfall(run, { verifier, contacts }) {
+  if (run.cancelRequested || run.counts.kept >= run.target) return;
+
+  const wall = contacts?.exhausted
+    ? `the Hunter credit cap (${run.counts.creditsUsed} searches) was reached`
+    : verifier?.ranOutOfChecks()
+      ? `the Google Maps safety ceiling (${run.counts.verifiedDone} lookups) was reached`
+      : run.counts.harvested >= run.candidateCeiling
+        ? `${run.counts.harvested} advertisers were checked without finding enough`
+        : 'the Ad Library ran out of new ads for this search';
+
+  // The gate that cost the most leads is the one worth acting on.
+  const biggest = [...(run.contactDrops || new Map())].sort((a, b) => b[1] - a[1])[0];
+  const because = biggest ? ` Most were lost to: ${biggest[0]} (${biggest[1]}).` : '';
+
+  const msg = `Finished with ${run.counts.kept} of ${run.target} leads — ${wall}.`
+    + ` ${run.counts.harvested} advertisers harvested, ${run.counts.skippedKnown} already in your library.`
+    + because;
+  run.errors.push({ scope: 'target', message: msg, kind: 'notice', ts: now() });
+  emit(run.id, { type: 'notice', scope: 'target', message: msg });
 }
 
 // ── Phase 0: what is this trade called on Google? ───────────────────────────
@@ -172,78 +224,108 @@ async function nichePhase(run) {
   emit(run.id, { type: 'phase_done', phase: 'learning', categories });
 }
 
-// ── Phase 3: the decision maker ──────────────────────────────────────────────
+// ── The decision maker, found while the harvest is still running ────────────
 // One contactable person per business, or the lead is dropped. This is the last
-// gate, and the expensive one: Hunter bills a credit per domain that returns
-// people, so the budget is capped per run and reported honestly.
-async function hunterPhase(run) {
-  if (run.filters.enrichWithHunter === false) return;
+// gate and the expensive one — Hunter bills a credit per domain that returns
+// people, and it rejects roughly four leads in five — so running it after the
+// harvest could only ever shrink the list below what was asked for. Running it
+// here instead makes `counts.kept` a live count of finished leads, and the
+// harvest keeps digging until that count reaches the target.
+async function startContacts(run) {
+  if (run.filters.enrichWithHunter === false) return null;
   if (!config.hunter.apiKey) {
     const msg = 'No Hunter API key set (HUNTER_API_KEY) — leads have no contact details.';
     run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
     emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
-    return;
+    return null;
   }
 
-  run.phase = 'contacts';
-  run.contactDrops = new Map();
-  const targets = store.keptBusinesses(run);
-  emit(run.id, { type: 'phase_started', phase: 'contacts', total: targets.length });
-
-  // The lead view knows where the website lives — Maps listing first, ad
-  // destination second — so Hunter is never handed an fb.me link.
-  for (const b of targets) {
-    const lead = fromMetaBusiness(b);
-    b.website = lead.website;
-    b.business_name = lead.business_name;
-  }
+  // Set BEFORE the first candidate is admitted: it is what makes a lead with
+  // no email count as unfinished, which is what the target measures.
+  run.contactsRequired = true;
 
   // Seeded with the companies and people earlier runs already produced, so a
   // business advertising under a new page cannot arrive as a second lead for
   // the same person.
   const known = await library.knownContacts().catch(() => null);
 
-  const res = await enrichLeads(targets, {
+  emit(run.id, { type: 'phase_started', phase: 'contacts', target: run.target });
+
+  const ready = (b) => (!run.filters.verifyOnMaps || b.verify_status === 'kept')
+    && b.contact_status === 'pending';
+
+  return startEnrichment({
     known,
     maxCredits: run.filters.hunterMaxCredits ?? config.hunter.defaultMaxCredits,
-    shouldStop: () => run.cancelRequested,
-    onLead: (lead) => {
-      run.counts.enrichedContacts++;
-      emit(run.id, { type: 'contact_found', business: lead, counts: run.counts });
+    cancelled: () => run.cancelRequested,
+    // Finished leads only — a candidate still in a worker does not count.
+    capacity: () => run.target - store.recount(run),
+
+    nextLead: () => {
+      const b = run.businesses.find(ready);
+      if (!b) return null;
+      b.contact_status = 'checking';
+      // The lead view knows where the website lives — the Maps listing, never
+      // the ad destination — so Hunter is never handed an fb.me or an Amazon
+      // product page.
+      const lead = fromMetaBusiness(b);
+      b.website = lead.website;
+      b.business_name = lead.business_name;
+      return b;
     },
-    onDrop: (lead, reason) => {
-      run.counts.skippedNoContact++;
-      // Grouped on the wording so the tally points at the cause, not at every
-      // distinct error string.
-      const key = String(reason).replace(/:.*$/, '');
-      run.contactDrops.set(key, (run.contactDrops.get(key) || 0) + 1);
+
+    onKept: (b) => {
+      b.contact_status = 'kept';
+      run.counts.enrichedContacts++;
+      store.recount(run);
+      emit(run.id, { type: 'contact_found', business: b, counts: run.counts, pending: false });
+    },
+
+    onDropped: (b, reason) => {
+      // Remembered as seen: this advertiser's domain has nobody to email, and
+      // a later run should not pay to find that out again.
+      run.seenForLibrary.push({ library_id: b.library_id, page_id: b.page_id, outcome: 'no_contact' });
+      store.dropContact(run, b, reason);
       emit(run.id, {
-        type: 'contact_missing', page_name: lead.business_name, reason, counts: run.counts,
+        type: 'contact_missing', page_name: b.business_name || b.page_name, reason, counts: run.counts,
       });
     },
-    onProgress: ({ done, total, creditsUsed }) => {
+
+    onProgress: ({ creditsUsed }) => {
       run.counts.creditsUsed = creditsUsed;
-      emit(run.id, { type: 'contact_progress', done, total, creditsUsed, counts: run.counts });
+      emit(run.id, {
+        type: 'contact_progress',
+        done: run.counts.enrichedContacts + run.counts.skippedNoContact,
+        kept: run.counts.kept, target: run.target, creditsUsed, counts: run.counts,
+      });
     },
+
     onError: (info) => {
       run.errors.push({ scope: 'hunter', message: info.message, ts: now() });
       emit(run.id, { type: 'error', scope: 'hunter', message: info.message, recoverable: !info.fatal });
     },
   });
+}
 
-  run.counts.creditsUsed = res.creditsUsed;
-  run.enrichmentDone = true;
+// The queue is final: drain it, then say honestly why the run ended where it
+// did. A list that stops at 94 of 150 is only trustworthy if it names the wall
+// it hit.
+async function finishContacts(run, contacts) {
+  contacts.harvestFinished();
+  if (run.cancelRequested) contacts.stop();
+  await contacts.promise;
+
+  run.counts.creditsUsed = contacts.creditsUsed;
   store.recount(run);
 
-  if (res.stoppedEarly && res.dropped.length) {
-    const msg = res.fatal
-      || `Hunter credit limit reached after ${res.creditsUsed} searches — later leads were not checked.`;
-    run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
-    emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
+  if (contacts.fatal) {
+    run.errors.push({ scope: 'hunter', message: contacts.fatal, kind: 'notice', ts: now() });
+    emit(run.id, { type: 'notice', scope: 'hunter', message: contacts.fatal });
   }
+
   emit(run.id, {
     type: 'phase_done', phase: 'contacts',
-    kept: run.counts.kept, credits: res.creditsUsed,
+    kept: run.counts.kept, credits: contacts.creditsUsed,
   });
 }
 
@@ -326,7 +408,7 @@ async function runPool(items, concurrency, run, worker) {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function finalize(run, status, message) {
-  store.purgeUnverified(run);
+  store.purgeIncomplete(run);
   run.status = status;
   run.phase = 'done';
   run.finishedAt = now();

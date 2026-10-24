@@ -22,11 +22,18 @@ export const config = {
   headless: !bool(process.env.HEADFUL, false),
   slowMoMs: num(process.env.SLOW_MO_MS, 0),
 
-  // Harvest target. The scraper keeps going until it collects this many unique
-  // businesses OR genuinely runs out of ads while scrolling. MAX_TARGET is a
-  // hard ceiling enforced when normalising filters.
+  // The target is how many FINISHED leads a run must deliver — verified on Maps
+  // and carrying a decision maker. MAX_TARGET is a hard ceiling enforced when
+  // normalising filters.
   targetAds: num(process.env.TARGET_ADS, 500),
   maxTarget: num(process.env.MAX_TARGET, 2500),
+
+  // …and how many advertisers it may chew through to get there. The measured
+  // funnel is ~9 harvested advertisers per finished lead, so the per-lead
+  // allowance is generous; maxCandidates is the absolute rail that stops a
+  // hopeless niche scrolling all night.
+  candidatesPerLead: num(process.env.CANDIDATES_PER_LEAD, 50),
+  maxCandidates: num(process.env.MAX_CANDIDATES, 20000),
 
   // Safety ceiling for the WHOLE harvest (all keywords × countries), so a stuck
   // run eventually ends. Generous, because a multi-keyword sweep to 5,000 ads

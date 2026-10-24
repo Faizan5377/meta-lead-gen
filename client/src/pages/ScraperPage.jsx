@@ -89,9 +89,17 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
     catch {} finally { setTimeout(() => setRefreshing(false), 300); }
   }
 
+  // Finished leads only. The array also holds candidates still working through
+  // Google and Hunter, and a half-filled row is not a lead — the table shows
+  // exactly what an export would contain.
+  const leads = useMemo(
+    () => state.businesses.filter((b) => !b._pending),
+    [state.businesses],
+  );
+
   // Metrics are derived from the live array so the numbers always equal the rows.
   const metrics = useMemo(() => {
-    const B = state.businesses;
+    const B = leads;
     const n = (f) => B.reduce((a, b) => a + (f(b) ? 1 : 0), 0);
     return {
       businesses: B.length,
@@ -102,7 +110,7 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
       skippedKnown: state.counts.skippedKnown || 0,
       skippedIrrelevant: state.counts.skippedIrrelevant || 0,
     };
-  }, [state.businesses, state.counts]);
+  }, [leads, state.counts]);
 
   const running = state.status === 'running';
   const hasRun = state.status !== 'idle';
@@ -149,7 +157,7 @@ export default function ScraperPage({ meta, stats, onLibraryChanged, onGoToLibra
           <>
             <MetricsBar metrics={metrics} />
             <ProgressPanel state={state} />
-            <LeadsTable leads={state.businesses.map(metaLead)} />
+            <LeadsTable leads={leads.map(metaLead)} />
           </>
         ) : (
           <EmptyState stats={stats} onGoToLibrary={onGoToLibrary} />

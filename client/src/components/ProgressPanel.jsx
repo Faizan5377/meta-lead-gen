@@ -55,7 +55,7 @@ export default function ProgressPanel({ state }) {
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
           <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>Collected</span>
+            <span>Leads finished</span>
             <span className="tabular text-slate-700 dark:text-slate-200"><AnimatedNumber value={state.counts.kept} /> / {state.target}</span>
           </div>
           <Bar done={state.counts.kept} total={state.target} />
@@ -71,14 +71,20 @@ export default function ProgressPanel({ state }) {
         </div>
         <div>
           <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>{enrichOn ? 'Advertiser details' : 'Saved to library'}</span>
+            <span>{enrichOn ? 'Advertiser details' : 'Decision makers'}</span>
             <span className="tabular text-slate-700 dark:text-slate-200">
               {enrichOn
                 ? <><AnimatedNumber value={state.phaseInfo.enriching.done} /> / {state.phaseInfo.enriching.total}</>
-                : (state.saveResult ? `${state.saveResult.saved}${state.saveResult.remote ? '' : ' (local)'}` : '—')}
+                : <><AnimatedNumber value={state.counts.enrichedContacts || 0} /> found</>}
             </span>
           </div>
-          {enrichOn && <Bar done={state.phaseInfo.enriching.done} total={state.phaseInfo.enriching.total} />}
+          {enrichOn
+            ? <Bar done={state.phaseInfo.enriching.done} total={state.phaseInfo.enriching.total} />
+            : (
+              <div className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                {state.counts.skippedNoContact || 0} with nobody to email · {state.counts.creditsUsed || 0} credits
+              </div>
+            )}
         </div>
       </div>
 

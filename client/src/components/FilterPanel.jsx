@@ -40,7 +40,7 @@ export default function FilterPanel({ meta, filters, setFilters, onStart, onStop
         </Field>
 
         <Field
-          label={<>Ads to collect <InfoTip text={`How many advertisers to pull off the Ad Library. This is the RAW count — finding each one's decision maker then drops the ones with nobody to email, so the finished list is smaller. Maximum ${meta.maxTarget.toLocaleString()}.`} /></>}
+          label={<>Leads to collect <InfoTip text={`How many FINISHED leads you want — confirmed on Google Maps and carrying a decision maker's email. The run keeps digging through the Ad Library until it has that many, so asking for 150 may scan several thousand ads. Maximum ${meta.maxTarget.toLocaleString()}.`} /></>}
           className="w-36"
         >
           <div className="relative">

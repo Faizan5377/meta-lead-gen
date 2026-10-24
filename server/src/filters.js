@@ -209,7 +209,7 @@ export const FILTER_HELP = {
   platforms: 'Where the ad ran: Facebook, Instagram, Messenger, Audience Network or Threads. Leave empty for all.',
   languages: 'The language of the ad’s content. Leave empty for all languages.',
   dateRange: 'Filters by when the ad started running (Meta’s “Impressions by date”). Pick a from/to range.',
-  target: 'How many unique businesses to collect before the harvest stops. One ad is kept per business (its longest-running one).',
+  target: 'How many FINISHED leads the run must deliver — confirmed on Google Maps and carrying a decision maker\u2019s email. It is not a number of ads: the harvest keeps digging until that many leads exist, so a target of 150 routinely scans several thousand ads and checks hundreds of listings.',
   ctas: 'The button on the ad. Meta has no CTA filter, so this is applied to the harvested ad — and a rejected ad never uses up your target. The button says what the ad is FOR: “Apply now” is overwhelmingly recruiting and course ads, “Book now” and “Get quote” are businesses chasing customers.',
   verifyOnMaps: 'Look every surviving advertiser up on Google Maps and attach its opening hours, rating, review count, category and Maps link — then drop the ones that do not match. Costs one Maps visit per advertiser, so runs take longer and dig deeper.',
 };
