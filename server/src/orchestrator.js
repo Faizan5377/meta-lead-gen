@@ -20,6 +20,7 @@ import { COUNTRIES } from './filters.js';
 import { library } from './library.js';
 import { createRelevanceGate } from './relevance.js';
 import { store } from './store.js';
+import { settledOrStalled } from './watchdog.js';
 import { harvest, newPage } from './scraper/engine.js';
 import { startVerification } from './verify/phase.js';
 import { startEnrichment } from './enrich/phase.js';
@@ -82,7 +83,12 @@ async function harvestPhase(run) {
     : null;
   if (verifier) emit(run.id, { type: 'phase_started', phase: 'verifying', target: run.target });
 
-  await harvest({
+  // Set when the harvest is abandoned mid-flight. The promise cannot be
+  // cancelled, so the records it may still deliver have to be ignored instead —
+  // otherwise it mutates a run that has already been finalized and saved.
+  let harvestAbandoned = false;
+
+  const harvesting = harvest({
     filters: run.filters,
     // `counts.kept` is the live count of finished leads, so this reads "stop
     // when the user has what they asked for" — not "stop after N attempts".
@@ -94,6 +100,7 @@ async function harvestPhase(run) {
       || !!contacts?.exhausted
       || !!verifier?.ranOutOfChecks(),
     onAd: (rec) => {
+      if (harvestAbandoned) return;
       const res = store.considerAd(run, rec, relevance);
 
       if (res.status === 'added' || res.status === 'updated') {
@@ -142,11 +149,31 @@ async function harvestPhase(run) {
     emit(run.id, { type: 'error', scope: 'harvest', message: err.message, recoverable: true });
   });
 
+  // A browser call can wedge with no error and no timeout, and the ceiling
+  // inside the harvest loop cannot fire while the loop is blocked. Everything
+  // below — the drains, the save — is queued behind this await, so without a
+  // watchdog a single stuck page costs the whole run.
+  if (!await settledOrStalled(harvesting, {
+    progress: () => run.counts.rawSeen,
+    abandonWhen: () => run.cancelRequested, stallMs: config.stallMs,
+  })) {
+    harvestAbandoned = true;
+    stalled(run, 'harvest', `the Ad Library stopped returning ads. Carrying on with the `
+      + `${run.counts.harvested} advertisers already collected.`);
+  }
+
   // The feed is exhausted; let the workers drain what is still queued.
   if (verifier) {
     verifier.harvestFinished();
     if (run.cancelRequested) verifier.stop();
-    await verifier.promise;
+    if (!await settledOrStalled(verifier.promise, {
+      progress: () => run.counts.verifiedDone,
+    abandonWhen: () => run.cancelRequested, stallMs: config.stallMs,
+    })) {
+      verifier.stop();
+      stalled(run, 'verify', `Google Maps stopped responding after `
+        + `${run.counts.verifiedDone} lookups.`);
+    }
     emit(run.id, {
       type: 'phase_done', phase: 'verifying',
       checked: run.counts.verifiedDone, kept: run.counts.kept,
@@ -313,7 +340,14 @@ async function startContacts(run) {
 async function finishContacts(run, contacts) {
   contacts.harvestFinished();
   if (run.cancelRequested) contacts.stop();
-  await contacts.promise;
+  if (!await settledOrStalled(contacts.promise, {
+    progress: () => run.counts.enrichedContacts + run.counts.skippedNoContact,
+    abandonWhen: () => run.cancelRequested, stallMs: config.stallMs,
+  })) {
+    contacts.stop();
+    stalled(run, 'hunter', `contact lookup stopped responding after `
+      + `${run.counts.creditsUsed} searches.`);
+  }
 
   run.counts.creditsUsed = contacts.creditsUsed;
   store.recount(run);
@@ -404,6 +438,17 @@ async function runPool(items, concurrency, run, worker) {
     })());
   }
   await Promise.all(workers);
+}
+
+// A phase was abandoned, not finished. Said plainly and in the run's own
+// errors, because the alternative is a short list with no explanation — and
+// the run still goes on to save what it has, which is the whole point of
+// giving up on it.
+function stalled(run, scope, what) {
+  const mins = Math.round(config.stallMs / 60000);
+  const msg = `Stopped waiting on the ${scope} step — no progress for ${mins} minutes: ${what}`;
+  run.errors.push({ scope, message: msg, kind: 'notice', ts: now() });
+  emit(run.id, { type: 'notice', scope, message: msg });
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

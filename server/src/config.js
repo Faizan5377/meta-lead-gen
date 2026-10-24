@@ -39,6 +39,12 @@ export const config = {
   // run eventually ends. Generous, because a multi-keyword sweep to 5,000 ads
   // legitimately takes a while.
   maxRunMs: num(process.env.MAX_RUN_MS, 90 * 60 * 1000),
+
+  // …and the backstop for when that ceiling cannot fire, because the loop that
+  // checks it is itself blocked inside a browser call. A phase that has not
+  // moved a counter in this long is stuck, not slow, and is abandoned so the
+  // run can still save what it has. See watchdog.js.
+  stallMs: num(process.env.STALL_MS, 15 * 60 * 1000),
   scrollSettleMs: num(process.env.SCROLL_SETTLE_MS, 2200),
   // How many consecutive scroll cycles with zero new ads before we conclude the
   // feed is exhausted. Kept high because Meta back-fills lazily.
