@@ -85,8 +85,12 @@ export default function MapsPage({ onLibraryChanged }) {
   const canStart = filters.queries.length > 0 && !busy;
 
   // Derived from the live array so the numbers always match the table.
+  // Finished leads only. The array also holds places still working through
+  // Hunter, and a row with no one to email is not a lead.
+  const leads = useMemo(() => state.places.filter((p) => !p._pending), [state.places]);
+
   const metrics = useMemo(() => {
-    const P = state.places;
+    const P = leads;
     const n = (f) => P.reduce((a, p) => a + (f(p) ? 1 : 0), 0);
     return {
       total: P.length,
@@ -95,7 +99,7 @@ export default function MapsPage({ onLibraryChanged }) {
       highRated: n((p) => (p.rating ?? 0) >= 4.5),
       noSite: n((p) => !p.website),
     };
-  }, [state.places]);
+  }, [leads]);
 
   return (
     <>
@@ -136,7 +140,7 @@ export default function MapsPage({ onLibraryChanged }) {
                 disabled={running} placeholder="Austin TX, Dallas TX…" />
             </div>
 
-            <Field label={<>Target <InfoTip text={`How many NEW businesses to collect. Maximum ${limits.maxTarget.toLocaleString()}. You get exactly this many, never more.`} /></>} className="w-28">
+            <Field label={<>Target <InfoTip text={`How many FINISHED leads you want — new businesses carrying a decision maker's email. The search keeps digging, into related terms and neighbouring areas, until it has that many, so asking for 100 may check many hundreds of listings. Maximum ${limits.maxTarget.toLocaleString()}, and never more than you asked for.`} /></>} className="w-28">
               <div className="relative">
                 <Target size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input type="number" min={1} max={limits.maxTarget} value={filters.target} disabled={running}
@@ -164,7 +168,7 @@ export default function MapsPage({ onLibraryChanged }) {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 px-4 py-2.5 dark:border-slate-800">
             <Check label="Widen the search when the target isn’t reached" checked={filters.autoExpand} disabled={running}
               onChange={(autoExpand) => set({ autoExpand })}
-              hint="Google caps ONE search at roughly 120 results however far you scroll — which is why a target of 100 can finish at 9 once quality filters bite. With this on, the same search is re-run across neighbouring parts of the map, closest first, stopping the moment your target is met." />
+              hint="Google caps ONE search at roughly 120 results however far you scroll, and the contact lookup then rejects most of what survives — so one search almost never reaches the target on its own. With this on, the same search is re-run across neighbouring parts of the map, closest first, stopping the moment you have the leads you asked for." />
             {filters.autoExpand && (
               <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 How far out
@@ -183,7 +187,7 @@ export default function MapsPage({ onLibraryChanged }) {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 px-4 py-2.5 dark:border-slate-800">
             <Check label="Find the decision maker (Hunter.io)" checked={filters.enrichWithHunter !== false} disabled={running}
               onChange={(enrichWithHunter) => set({ enrichWithHunter })}
-              hint="Looks each business website up on Hunter and takes ONE contact, the most senior: Owner, then CEO, then President, then Vice President. Businesses with nobody at that level are dropped — your target is how many to collect, not how many survive." />
+              hint="Looks each business website up on Hunter and takes ONE contact, the most senior: Owner, then CEO, then President, then Vice President. Businesses with nobody at that level are dropped, and the search keeps going to replace them — your target is how many finished leads you end up with, not how many listings were checked. Turn this off and you get places without contacts instead." />
             {filters.enrichWithHunter !== false && (
               <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 Credit limit
@@ -206,7 +210,7 @@ export default function MapsPage({ onLibraryChanged }) {
           <>
             <Metrics m={metrics} counts={state.counts} target={state.target} />
             <Progress state={state} />
-            <LeadsTable leads={state.places.map(placeLead)} />
+            <LeadsTable leads={leads.map(placeLead)} />
           </>
         ) : (
           <Empty />

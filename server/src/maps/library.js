@@ -110,6 +110,44 @@ class PlacesLibrary {
     if (placeId != null) this.known.add(String(placeId));
   }
 
+  // Companies and people already collected — by EITHER scraper.
+  //
+  // A plumber who advertises on Facebook and has a Maps listing is one company
+  // with one owner, and a list that contains them twice is a list that emails
+  // them twice. The two scrapers write to different tables, so the only place
+  // that can see both is here; reading `ads` as well as `places` is what stops
+  // a Maps run paying a credit to rediscover a lead the Ad Library already has.
+  async knownContacts() {
+    const emails = new Set();
+    const domains = new Set();
+    const add = (rows, site) => {
+      for (const r of rows || []) {
+        if (r.owner_email) emails.add(String(r.owner_email).toLowerCase());
+        const host = String(r[site] || '')
+          .replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0].toLowerCase();
+        if (host.includes('.')) domains.add(host);
+      }
+    };
+
+    if (this.sb) {
+      for (const [table, site] of [['places', 'website'], ['ads', 'maps_website']]) {
+        try {
+          const PAGE = 1000;
+          for (let from = 0; ; from += PAGE) {
+            const { data, error } = await this.sb
+              .from(table).select(`owner_email,${site}`)
+              .not('owner_email', 'is', null)
+              .range(from, from + PAGE - 1);
+            if (error) break;
+            add(data, site);
+            if (!data || data.length < PAGE) break;
+          }
+        } catch { /* one table missing must not cost the other */ }
+      }
+    }
+    return { emails: [...emails], domains: [...domains] };
+  }
+
   async save(places, runId) {
     if (!this.sb || !places.length) return { saved: places.length, remote: false };
     const rows = places.map((p) => toRow(p, runId));

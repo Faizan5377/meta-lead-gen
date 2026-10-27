@@ -100,7 +100,9 @@ harvest() ends → verifier.harvestFinished() → await verifier.promise
 - `store.keptBusinesses(run)` / `maps.keptPlaces(run)` are the only honest views of a run. Never read `run.businesses` or `run.places` directly — they hold candidates, and the CSV is exactly where an unenriched one must not appear.
 - The client mirrors this: rows arrive `_pending` and the table shows only finished ones, so what is on screen is what an export would contain. The server decides (`pending:` on `business_added` / `business_verified` / `contact_found`), never the client.
 
-**Google Maps:** unchanged — its target still counts places collected, and it still uses the batch `enrichLeads()` as a closing phase.
+**Google Maps:** the same, and for the same reason. Its target counts places that carry a decision maker, `startContacts` runs alongside the search, and `needsMore()` — the thing that drives related terms and the viewport sweep — reads finished leads, so the sweep keeps widening until they exist. The one difference is what feeds it: Meta's candidates pass through Maps verification first, Maps' candidates go straight from the quality gate to Hunter.
+
+**With the contact lookup switched off** (no `HUNTER_API_KEY`, or `enrichWithHunter: false`), both fall back to the old meaning — the places or advertisers *are* the result, and the target caps admission exactly as it used to. `keptPlaces`/`keptBusinesses` key off `run.contactsRequired`, which is set only when the lookup actually starts.
 
 ### One lead shape, both scrapers
 
@@ -160,11 +162,13 @@ Three things here are counter-intuitive enough to have each caused a bug:
 
 **`noteCategory` deliberately learns from REJECTED places too.** A plumber with 12 reviews is still a plumber; learning only from survivors starves the learner exactly when a strict gate makes pass 2 matter. Only a rejection in `OFF_NICHE` (name/category exclusions) disqualifies a place from teaching. As in the Ad Library: primary category only, and two businesses before a category counts.
 
-A run that still finishes short calls `adviseOnShortfall`, which names the filter that dropped the most and what to change. Finishing at 9 of 100 with no explanation is indistinguishable from a bug.
+A run that still finishes short calls `adviseOnShortfall`, which names **which wall it hit** — the credit cap, the candidate ceiling, or Google running dry — then the gate that cost the most, whether that was the quality filters, the library, or the contact lookup. Finishing at 9 of 100 with no explanation is indistinguishable from a bug, and "out of credits" needs a different fix from "thin niche".
 
 Field indices for the place record are documented at the top of [parser.js](server/src/maps/parser.js) — verified against live data, so start there when a field stops extracting.
 
 Unlike the Ad Library, Maps has **no SQLite mirror**: [maps/library.js](server/src/maps/library.js) is Supabase plus a warmed in-memory id set, so without credentials dedup is per-process only.
+
+`placesLibrary.knownContacts()` reads **both** `places` and `ads`. A plumber with a Maps listing and a Facebook page is one company with one owner, and the two scrapers write to different tables — this is the only place that can see both, so it is what stops a Maps run paying a credit to rediscover a lead the Ad Library already has.
 
 ### Lead quality is a gate, not a search filter
 
@@ -199,6 +203,12 @@ The Maps stream is the same contract in [maps/orchestrator.js](server/src/maps/o
 ### Failure philosophy
 
 Every phase is wrapped; per-item failures are pushed to `run.errors` and emitted as `recoverable`. Results save even when a run is stopped or errors. Export is allowed on `finished`, `stopped`, **or `error`**.
+
+**A phase that hangs is the exception that broke this**, so [watchdog.js](server/src/watchdog.js) backs it up. A live run sat on identical counts for seven hours: the harvest wedged inside Playwright with no error and no timeout, `MAX_RUN_MS` could not fire because the loop that checks it was itself blocked, the drains behind it read their empty queues as "wait for more", and 90 finished leads could not be saved because `savePhase` comes after the harvest. Stop did nothing either — it sets a flag the blocked loop never reads.
+
+`settledOrStalled()` watches **movement, not the clock**: a fixed deadline cannot tell a stuck phase from a slow one, and draining a thousand candidates legitimately takes an hour. A counter that has not moved in `config.stallMs` has stopped. It guards every phase that can wedge in both orchestrators, and when one gives up the run names the phase and carries on to save. An abandoned promise is *ignored, not cancelled* — `harvestAbandoned` makes late records no-ops, because a wedged promise cannot be cancelled and would otherwise mutate a run that has already been saved.
+
+`scripts/save-snapshot.js` is the recovery path for leads already stranded by a run that never reached its save, and is idempotent.
 
 ## Where to make common changes
 

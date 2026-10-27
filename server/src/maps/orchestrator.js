@@ -1,7 +1,8 @@
-// Pipeline for one Maps run: harvest -> save.
+// Pipeline for one Maps run: harvest (with contacts alongside) -> save.
 //
 // Same guarantees as the Ad Library scraper:
-//   • the target is a HARD ceiling — exactly N places, never more
+//   • the target counts FINISHED leads — places carrying a decision maker —
+//     so the search keeps digging until that many exist, and never returns more
 //   • places already in the shared library are skipped, so each run returns
 //     only NEW businesses
 //   • results are saved in one batch at the end, including when the run is
@@ -14,8 +15,9 @@ import { bus } from '../eventStream.js';
 import { placesLibrary } from './library.js';
 import { harvest } from './engine.js';
 import { judge } from './quality.js';
-import { enrichLeads } from '../enrich/phase.js';
+import { startEnrichment } from '../enrich/phase.js';
 import { fromPlace } from '../leadSchema.js';
+import { settledOrStalled } from '../watchdog.js';
 
 const runs = new Map();
 
@@ -28,15 +30,23 @@ export function createRun(filters) {
     status: 'idle',            // idle | running | finished | stopped | error
     phase: 'idle',             // idle | searching | saving | done
     filters,
+    // That many FINISHED leads — a place with nobody to email is not a lead.
     target: filters.target,
+    // …and the rail on how many places may be checked getting there, since
+    // every one can cost a Hunter credit.
+    candidateCeiling: Math.min(
+      config.maxCandidates,
+      Math.max(500, filters.target * config.candidatesPerLead),
+    ),
     places: [],
     byId: new Map(),           // feature id -> place
     seen: new Set(),           // every feature id considered, kept or not
     categories: new Map(),     // what Google calls this niche — learned, never hardcoded
+    contactDrops: new Map(),   // why Hunter rejected leads, for the shortfall advice
     counts: {
       found: 0,
-      harvested: 0,        // places collected — THIS is the target
-      kept: 0,             // contactable leads left after Hunter
+      harvested: 0,        // places admitted as candidates — a diagnostic
+      kept: 0,             // finished leads: contactable — THIS is the target
       skippedKnown: 0, skippedFiltered: 0,
       skippedNoContact: 0, enrichedContacts: 0, creditsUsed: 0,
     },
@@ -51,9 +61,40 @@ export function createRun(filters) {
 
 export const getRun = (id) => runs.get(id);
 
-// After Hunter, a place with nobody to email is not a lead.
+// A place with nobody to email is not a lead. Applied from the moment the
+// contact lookup starts, not after it finishes: the two run together, and this
+// count is what the search's stop condition reads.
 export function keptPlaces(run) {
-  return run.enrichmentDone ? run.places.filter((p) => !!p.owner_email) : run.places;
+  return run.contactsRequired ? run.places.filter((p) => !!p.owner_email) : run.places;
+}
+
+function recount(run) {
+  run.counts.kept = keptPlaces(run).length;
+  return run.counts.kept;
+}
+
+// Hunter found no one worth emailing. The place leaves the array entirely, so
+// the snapshot stays small on a run that checks thousands to keep hundreds —
+// and `run.seen` already holds its id, so this run will not reconsider it.
+function dropContact(run, place, reason) {
+  place.contact_status = 'dropped';
+  const i = run.places.indexOf(place);
+  if (i >= 0) run.places.splice(i, 1);
+  run.byId.delete(place.feature_id);
+  run.counts.skippedNoContact++;
+  // Grouped on the wording so the tally points at the cause, not at every
+  // distinct error string.
+  const key = String(reason).replace(/:.*$/, '');
+  run.contactDrops.set(key, (run.contactDrops.get(key) || 0) + 1);
+  recount(run);
+}
+
+// The run is over: anything still waiting on Hunter was never going to finish.
+function purgeIncomplete(run) {
+  if (!run.contactsRequired) return 0;
+  const left = run.places.filter((p) => !p.owner_email);
+  for (const p of left) dropContact(run, p, 'not checked — target already met');
+  return left.length;
 }
 
 export function snapshot(run) {
@@ -61,6 +102,7 @@ export function snapshot(run) {
     id: run.id, kind: 'maps', name: run.name, createdAt: run.createdAt,
     status: run.status, phase: run.phase, filters: run.filters, target: run.target,
     counts: run.counts, places: keptPlaces(run), errors: run.errors.slice(-100),
+    contactDrops: Object.fromEntries(run.contactDrops || []),
     // The exact tally, so a reloaded page shows what the filters dropped
     // rather than only what has streamed in since.
     rejectReasons: Object.fromEntries(run.rejectReasons),
@@ -87,7 +129,6 @@ export async function runPipeline(runId) {
 
   try {
     await searchPhase(run);
-    if (!run.cancelRequested) await hunterPhase(run);
     await savePhase(run);
     finalize(run, run.cancelRequested ? 'stopped' : 'finished');
   } catch (err) {
@@ -103,13 +144,28 @@ async function searchPhase(run) {
 
   const quality = run.filters.quality;
 
-  await harvest({
+  // The contact lookup runs ALONGSIDE the search, not after it. Hunter rejects
+  // most places, so running it last could only ever shrink the list below what
+  // was asked for; running it here makes `counts.kept` a live count of finished
+  // leads, and the search keeps digging — including into neighbouring
+  // viewports — until that count reaches the target.
+  const contacts = await startContacts(run);
+
+  // Set before the first place is admitted so candidates are marked for the
+  // contact workers to pick up.
+  const stop = () => run.cancelRequested
+    || run.counts.kept >= run.target
+    || run.counts.harvested >= run.candidateCeiling
+    || !!contacts?.exhausted;
+
+  const searching = harvest({
     filters: run.filters,
-    shouldStop: () => run.cancelRequested || run.counts.harvested >= run.target,
-    // Google caps one search at ~120 results, so a strict quality gate can
-    // leave a target unfilled. This tells the engine to sweep nearby viewports
-    // — but only while the target is genuinely short.
-    needsMore: () => !run.cancelRequested && run.counts.harvested < run.target,
+    shouldStop: stop,
+    // Google caps one search at ~120 results, and Hunter then rejects most of
+    // what survives, so one search almost never yields the target on its own.
+    // This is what sends the engine into related terms and nearby viewports —
+    // and it reads FINISHED leads, so it keeps going until they exist.
+    needsMore: () => !stop(),
     relatedTerms: () => learnedCategories(run),
     onPlace: (p) => {
       // The area sweep deliberately re-runs the same search over overlapping
@@ -143,16 +199,30 @@ async function searchPhase(run) {
         return true;
       }
 
-      // Hard ceiling on the RAW harvest; Hunter shrinks the list afterwards.
-      if (run.counts.harvested >= run.target) return false;
+      // The ceiling here is on CANDIDATES, not on leads: the target counts
+      // finished leads, and `stop()` ends the search when it reaches them.
+      // This rail only stops a niche that keeps producing places and never
+      // produces a decision maker.
+      //
+      // With the contact lookup switched off there is no later gate, so the
+      // places ARE the leads and the target is the ceiling again — the old
+      // "exactly N, never more" guarantee, unchanged.
+      const ceiling = run.contactsRequired ? run.candidateCeiling : run.target;
+      if (run.counts.harvested >= ceiling) return false;
 
+      if (run.contactsRequired) p.contact_status = 'pending';
       run.places.push(p);
       run.byId.set(p.feature_id, p);
       run.counts.harvested++;
-      run.counts.kept = run.places.length;
-      placesLibrary.note(p.feature_id, p.place_id);
-      emit(run.id, { type: 'place_added', place: p, counts: run.counts });
-      return run.counts.harvested < run.target;
+      recount(run);
+      // NOT noted in the library yet: a place Hunter rejects must stay
+      // available to a later run rather than being hidden forever. That
+      // happens in noteFinished(), once it is actually a lead.
+      emit(run.id, {
+        type: 'place_added', place: p, counts: run.counts,
+        pending: !!run.contactsRequired,
+      });
+      return !stop();
     },
     // The rail finishes rendering after places have already streamed out, so
     // patch review counts onto what we kept rather than losing them.
@@ -167,6 +237,7 @@ async function searchPhase(run) {
     onProgress: (info) => emit(run.id, {
       type: 'search_progress', query: info.query,
       found: run.counts.found, kept: run.counts.kept,
+      harvested: run.counts.harvested,
       skippedKnown: run.counts.skippedKnown, target: run.target,
     }),
     onError: (info) => {
@@ -179,7 +250,24 @@ async function searchPhase(run) {
     emit(run.id, { type: 'error', scope: 'search', message: err.message, recoverable: true });
   });
 
-  if (!run.cancelRequested && run.counts.kept < run.target) adviseOnShortfall(run);
+  // A browser call can wedge with no error and no timeout, and everything
+  // below — the contact drain, the save — is queued behind this await.
+  if (!await settledOrStalled(searching, {
+    progress: () => run.counts.found,
+    abandonWhen: () => run.cancelRequested, stallMs: config.stallMs,
+  })) {
+    stalled(run, 'search', `Google Maps stopped returning results. Carrying on with the `
+      + `${run.counts.harvested} places already collected.`);
+  }
+
+  // The search has stopped producing, so the contact queue is now final.
+  if (contacts) await finishContacts(run, contacts);
+
+  // Only now is a place a lead. Noting it here is what makes the next run
+  // return NEW businesses.
+  for (const p of keptPlaces(run)) placesLibrary.note(p.feature_id, p.place_id);
+
+  if (!run.cancelRequested && run.counts.kept < run.target) adviseOnShortfall(run, contacts);
   emit(run.id, { type: 'phase_done', phase: 'searching', kept: run.counts.kept });
 }
 
@@ -216,9 +304,25 @@ export function learnedCategories(run, max = 6) {
 // A run that stops short is not a failure — Google's supply for one search is
 // finite. But finishing at 9 of 100 with no explanation is indistinguishable
 // from a bug, so say exactly which lever to pull.
-export function adviseOnShortfall(run) {
-  const { kept, skippedFiltered, skippedKnown } = run.counts;
-  const parts = [`Google had no more results for this search — finished with ${kept} of ${run.target}.`];
+export function adviseOnShortfall(run, contacts) {
+  const { kept, harvested, skippedFiltered, skippedKnown, creditsUsed } = run.counts;
+
+  // Which wall the run actually hit. Naming it matters more than the advice:
+  // "a thin niche", "you ran out of credits" and "the scraper is broken" all
+  // look identical from a short list.
+  const wall = contacts?.exhausted
+    ? `the Hunter credit cap (${creditsUsed} searches) was reached`
+    : harvested >= run.candidateCeiling
+      ? `${harvested} places were checked without finding enough decision makers`
+      : 'Google had no more results for this search';
+  const parts = [`${wall} — finished with ${kept} of ${run.target} leads.`];
+
+  // The contact lookup is the gate that rejects most, so when it is the main
+  // cost it is the first thing to say.
+  const lostToHunter = [...(run.contactDrops || new Map())].sort((a, b) => b[1] - a[1])[0];
+  if (lostToHunter && run.counts.skippedNoContact >= Math.max(10, kept)) {
+    parts.push(`${run.counts.skippedNoContact} places had no decision maker to email, mostly “${lostToHunter[0]}” (${lostToHunter[1]}).`);
+  }
 
   const worst = [...run.rejectReasons.entries()].sort((a, b) => b[1] - a[1])[0];
   if (worst && skippedFiltered >= Math.max(10, kept)) {
@@ -240,61 +344,104 @@ export function adviseOnShortfall(run) {
   emit(run.id, { type: 'notice', scope: 'shortfall', message });
 }
 
-// The same decision-maker step the Ad Library runs — one shared module, so a
-// Maps lead and a Meta lead are enriched identically and stack into one list.
-async function hunterPhase(run) {
-  if (run.filters.enrichWithHunter === false) return;
+// The same decision-maker step the Ad Library runs, driven the same way — one
+// shared module, so a Maps lead and a Meta lead are enriched identically and
+// stack into one list. One contactable person per business, or the place is
+// dropped.
+async function startContacts(run) {
+  if (run.filters.enrichWithHunter === false) return null;
   if (!config.hunter.apiKey) {
     const msg = 'No Hunter API key set (HUNTER_API_KEY) — leads have no contact details.';
     run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
     emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
-    return;
+    return null;
   }
 
-  run.phase = 'contacts';
-  emit(run.id, { type: 'phase_started', phase: 'contacts', total: run.places.length });
+  run.contactsRequired = true;
 
-  for (const p of run.places) {
-    const lead = fromPlace(p);
-    p.website = lead.website;
-    p.business_name = lead.business_name;
-  }
+  // Seeded with the people BOTH scrapers already found, so a business with a
+  // Maps listing and a Facebook page cannot arrive as two leads for one owner.
+  const known = await placesLibrary.knownContacts().catch(() => null);
 
-  const known = await placesLibrary.knownContacts?.().catch(() => null);
+  emit(run.id, { type: 'phase_started', phase: 'contacts', target: run.target });
 
-  const res = await enrichLeads(run.places, {
+  return startEnrichment({
     known,
     maxCredits: run.filters.hunterMaxCredits ?? config.hunter.defaultMaxCredits,
-    shouldStop: () => run.cancelRequested,
-    onLead: (lead) => {
+    cancelled: () => run.cancelRequested,
+    capacity: () => run.target - recount(run),
+
+    nextLead: () => {
+      const p = run.places.find((x) => x.contact_status === 'pending');
+      if (!p) return null;
+      p.contact_status = 'checking';
+      // The lead view decides which of a place's fields is the company site.
+      const lead = fromPlace(p);
+      p.website = lead.website;
+      p.business_name = lead.business_name;
+      return p;
+    },
+
+    onKept: (p) => {
+      p.contact_status = 'kept';
       run.counts.enrichedContacts++;
-      emit(run.id, { type: 'contact_found', place: lead, counts: run.counts });
+      recount(run);
+      emit(run.id, { type: 'contact_found', place: p, counts: run.counts, pending: false });
     },
-    onDrop: (lead, reason) => {
-      run.counts.skippedNoContact++;
-      emit(run.id, { type: 'contact_missing', name: lead.business_name, reason, counts: run.counts });
+
+    onDropped: (p, reason) => {
+      const name = p.business_name || p.name;
+      dropContact(run, p, reason);
+      emit(run.id, { type: 'contact_missing', name, reason, counts: run.counts });
     },
-    onProgress: ({ done, total, creditsUsed }) => {
+
+    onProgress: ({ creditsUsed }) => {
       run.counts.creditsUsed = creditsUsed;
-      emit(run.id, { type: 'contact_progress', done, total, creditsUsed, counts: run.counts });
+      emit(run.id, {
+        type: 'contact_progress',
+        done: run.counts.enrichedContacts + run.counts.skippedNoContact,
+        kept: run.counts.kept, target: run.target, creditsUsed, counts: run.counts,
+      });
     },
+
     onError: (info) => {
       run.errors.push({ scope: 'hunter', message: info.message, ts: now() });
       emit(run.id, { type: 'error', scope: 'hunter', message: info.message, recoverable: !info.fatal });
     },
   });
+}
 
-  run.enrichmentDone = true;
-  run.counts.creditsUsed = res.creditsUsed;
-  run.counts.kept = keptPlaces(run).length;
-
-  if (res.stoppedEarly && res.dropped.length) {
-    const msg = res.fatal
-      || `Hunter credit limit reached after ${res.creditsUsed} searches — later leads were not checked.`;
-    run.errors.push({ scope: 'hunter', message: msg, kind: 'notice', ts: now() });
-    emit(run.id, { type: 'notice', scope: 'hunter', message: msg });
+async function finishContacts(run, contacts) {
+  contacts.harvestFinished();
+  if (run.cancelRequested) contacts.stop();
+  if (!await settledOrStalled(contacts.promise, {
+    progress: () => run.counts.enrichedContacts + run.counts.skippedNoContact,
+    abandonWhen: () => run.cancelRequested, stallMs: config.stallMs,
+  })) {
+    contacts.stop();
+    stalled(run, 'hunter', `contact lookup stopped responding after ${run.counts.creditsUsed} searches.`);
   }
-  emit(run.id, { type: 'phase_done', phase: 'contacts', kept: run.counts.kept, credits: res.creditsUsed });
+
+  run.counts.creditsUsed = contacts.creditsUsed;
+  recount(run);
+
+  if (contacts.fatal) {
+    run.errors.push({ scope: 'hunter', message: contacts.fatal, kind: 'notice', ts: now() });
+    emit(run.id, { type: 'notice', scope: 'hunter', message: contacts.fatal });
+  }
+  emit(run.id, {
+    type: 'phase_done', phase: 'contacts',
+    kept: run.counts.kept, credits: contacts.creditsUsed,
+  });
+}
+
+// A phase was abandoned, not finished — said plainly, with the run still going
+// on to save what it has.
+function stalled(run, scope, what) {
+  const mins = Math.round(config.stallMs / 60000);
+  const msg = `Stopped waiting on the ${scope} step — no progress for ${mins} minutes: ${what}`;
+  run.errors.push({ scope, message: msg, kind: 'notice', ts: now() });
+  emit(run.id, { type: 'notice', scope, message: msg });
 }
 
 async function savePhase(run) {
@@ -313,6 +460,7 @@ async function savePhase(run) {
 }
 
 function finalize(run, status, message) {
+  purgeIncomplete(run);
   run.status = status;
   run.phase = 'done';
   run.finishedAt = now();

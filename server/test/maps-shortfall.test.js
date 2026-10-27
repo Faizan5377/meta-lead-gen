@@ -9,17 +9,25 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { adviseOnShortfall } from '../src/maps/orchestrator.js';
 
-const run = ({ kept = 9, filtered = 0, known = 0, reasons = {}, filters = {} } = {}) => ({
-  id: 'test-run', target: 100,
-  counts: { found: kept + filtered + known, kept, skippedKnown: known, skippedFiltered: filtered },
+const run = ({
+  kept = 9, filtered = 0, known = 0, reasons = {}, filters = {},
+  harvested = 0, ceiling = 5000, noContact = 0, credits = 0, drops = {},
+} = {}) => ({
+  id: 'test-run', target: 100, candidateCeiling: ceiling,
+  counts: {
+    found: kept + filtered + known, kept, harvested,
+    skippedKnown: known, skippedFiltered: filtered,
+    skippedNoContact: noContact, creditsUsed: credits,
+  },
   rejectReasons: new Map(Object.entries(reasons)),
+  contactDrops: new Map(Object.entries(drops)),
   filters: { autoExpand: true, expandRing: 2, ...filters },
   errors: [],
 });
 
 // The notice is pushed onto the run as well as emitted, so read it back there.
-function advise(r) {
-  adviseOnShortfall(r);
+function advise(r, contacts) {
+  adviseOnShortfall(r, contacts);
   return r.errors.at(-1);
 }
 
@@ -29,6 +37,31 @@ describe('adviseOnShortfall', () => {
     assert.match(note.message, /finished with 9 of 100/);
     assert.equal(note.kind, 'notice');
     assert.equal(note.scope, 'shortfall');
+  });
+
+  it('names the wall it hit, because a short list has several explanations', () => {
+    // Out of credits is a different problem from a thin niche, and the fix is
+    // different too — saying "Google had no more results" when the real cause
+    // was the credit cap sends you widening a search that was working.
+    assert.match(
+      advise(run({ kept: 40, credits: 400 }), { exhausted: true }).message,
+      /Hunter credit cap \(400 searches\)/,
+    );
+    assert.match(
+      advise(run({ kept: 12, harvested: 5000, ceiling: 5000 })).message,
+      /5000 places were checked without finding enough decision makers/,
+    );
+    assert.match(advise(run({ kept: 9 })).message, /Google had no more results/);
+  });
+
+  it('blames the contact lookup when that is what ate the list', () => {
+    const note = advise(run({
+      kept: 9, noContact: 220,
+      drops: { 'Hunter found nobody at this domain': 190, 'no usable website': 30 },
+    }));
+    assert.match(note.message, /220 places had no decision maker/);
+    assert.match(note.message, /Hunter found nobody at this domain/);
+    assert.ok(!/mostly “no usable website”/.test(note.message));
   });
 
   it('names the filter that cost the most, not just the total', () => {

@@ -70,10 +70,13 @@ export function mapsReducer(state, ev) {
         ticker: `Searching “${ev.query}” — ${ev.kept}/${ev.target} collected`,
       };
 
+    // A candidate, not a lead. `_pending` is the server's verdict — Hunter has
+    // yet to find anyone — and the table hides pending rows, so what is on
+    // screen is always what an export would contain.
     case 'place_added': {
       const id = ev.place.feature_id;
       if (state.index[id] != null) return { ...state, counts: ev.counts || state.counts };
-      const places = state.places.concat(ev.place);
+      const places = state.places.concat({ ...ev.place, _pending: ev.pending === true });
       return {
         ...state, places,
         index: { ...state.index, [id]: places.length - 1 },
@@ -95,13 +98,18 @@ export function mapsReducer(state, ev) {
       };
     }
 
+    // Hunter found the decision maker, so the place stops being pending and
+    // appears in the table. Appended if the row is somehow missing, because
+    // this event is the one that means "this is a lead".
     case 'contact_found': {
       const id = ev.place.feature_id;
       const i = state.index[id];
       const places = state.places.slice();
-      if (i != null) places[i] = { ...places[i], ...ev.place };
+      if (i != null) places[i] = { ...places[i], ...ev.place, _pending: false };
+      else places.push({ ...ev.place, _pending: false });
       return {
         ...state, places,
+        index: i != null ? state.index : { ...state.index, [id]: places.length - 1 },
         counts: ev.counts || state.counts,
         ticker: `Found ${ev.place.owner_email || 'a contact'} at "${ev.place.name}"`,
       };
@@ -122,7 +130,8 @@ export function mapsReducer(state, ev) {
       return {
         ...state,
         counts: ev.counts || state.counts,
-        ticker: `Finding decision makers — ${ev.done}/${ev.total} (${ev.creditsUsed} credits)`,
+        ticker: `Finding decision makers — ${ev.kept ?? ev.done}/${ev.target ?? '?'} leads`
+          + ` (${ev.done} checked, ${ev.creditsUsed} credits)`,
       };
 
     // Review counts arrive after the rail finishes rendering, so the server
